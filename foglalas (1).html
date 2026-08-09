@@ -154,7 +154,7 @@ footer.app-footer{text-align:center;padding:30px 0;color:var(--ink-soft);font-si
 </head>
 <body>
 
-<div class="demo-banner">⚠️ Demó verzió — az adatok csak ebben a böngészőben tárolódnak, valós fizetés és email nem történik. Lásd az oldal alján / a README-t az élesítéshez.</div>
+<div class="demo-banner">⚠️ Élő adatbázis (Supabase) — az adatok már mindenki böngészőjében megjelennek. Valós bankkártyás fizetés és automatikus email még nincs bekötve, lásd a README-t.</div>
 
 <div class="topbar">
   <div class="topbar-inner">
@@ -192,10 +192,8 @@ footer.app-footer{text-align:center;padding:30px 0;color:var(--ink-soft);font-si
     </form>
 
     <div class="demo-accounts">
-      <strong>Demó belépések a teszteléshez:</strong><br>
-      Admin: admin@merfoldko.hu / admin123<br>
-      Terapeuta: terapeuta.a@merfoldko.hu / terapeuta123<br>
-      Szülő: teszteld a regisztrációval, vagy: szulo@pelda.hu / szulo123
+      <strong>Első belépés?</strong><br>
+      Szülőként regisztrálj a fenti űrlappal. Terapeuta és admin fiókot a Supabase Dashboardon (Authentication → Users) tud létrehozni az adminisztrátor — lásd az útmutatót.
     </div>
   </div>
 </div>
@@ -219,78 +217,74 @@ footer.app-footer{text-align:center;padding:30px 0;color:var(--ink-soft);font-si
 
 <div class="toast" id="toast"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 /* =========================================================
-   ADATRÉTEG — DEMO: localStorage-ban tárolva (böngészőnként).
-   Éles rendszerben ezt egy valós adatbázis (pl. Supabase) váltja.
+   ADATRÉTEG — Supabase (valós, közös adatbázis, minden eszközön ugyanaz)
    ========================================================= */
-const DB_KEY = 'mfk_app_db_v1';
-const SESSION_KEY = 'mfk_app_session_v1';
+const SUPABASE_URL = 'https://lndfswvfippqyweyxtnk.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_Rjy1kDlYp2aX7r9LhMf-0g_5b3MUY-P';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 function uid(prefix){ return prefix + '_' + Math.random().toString(36).slice(2,9); }
 
-function seedDB(){
-  const now = new Date();
-  function atDay(offsetDays, hh, mm){
-    const d = new Date(now); d.setDate(d.getDate()+offsetDays); d.setHours(hh,mm,0,0); return d.toISOString();
+/* Memóriában tartott, a nézetek által olvasott "gyorsítótár" — refreshDB() tölti fel Supabase-ből. */
+let db = { users:[], therapists:[], rooms:[], serviceTypes:[], packages:[], slots:[], bookings:[] };
+let currentProfile = null;
+let dbReady = false;
+
+async function refreshDB(){
+  const [profilesRes, childrenRes, therRes, roomsRes, svcRes, pkgRes, slotRes, bookRes, waitRes] = await Promise.all([
+    sb.from('profiles').select('*'),
+    sb.from('children').select('*'),
+    sb.from('therapist_details').select('*'),
+    sb.from('rooms').select('*'),
+    sb.from('service_types').select('*'),
+    sb.from('packages').select('*'),
+    sb.from('slots').select('*'),
+    sb.from('bookings').select('*'),
+    sb.from('waitlist').select('*'),
+  ]);
+  const firstError = [profilesRes,childrenRes,therRes,roomsRes,svcRes,pkgRes,slotRes,bookRes,waitRes].find(r=>r.error);
+  if(firstError){
+    dbReady = false;
+    toast('Nem sikerült elérni az adatbázist: ' + firstError.error.message + ' — futtattad már az SQL scriptet?');
+    return;
   }
-  return {
-    users: [
-      { id:'u_admin', role:'admin', name:'Németh Borbála (Admin)', email:'admin@merfoldko.hu', pass:'admin123', phone:'', children:[] },
-      { id:'u_terA', role:'therapist', name:'Terapeuta A — Kovács Anna', email:'terapeuta.a@merfoldko.hu', pass:'terapeuta123', phone:'', children:[] },
-      { id:'u_terB', role:'therapist', name:'Terapeuta B — Szabó Péter', email:'terapeuta.b@merfoldko.hu', pass:'terapeuta123', phone:'', children:[] },
-      { id:'u_terC', role:'therapist', name:'Terapeuta C — Tóth Eszter', email:'terapeuta.c@merfoldko.hu', pass:'terapeuta123', phone:'', children:[] },
-      { id:'u_terD', role:'therapist', name:'Terapeuta D — Nagy Zoltán', email:'terapeuta.d@merfoldko.hu', pass:'terapeuta123', phone:'', children:[] },
-      { id:'u_parent1', role:'parent', name:'Kiss Anikó', email:'szulo@pelda.hu', pass:'szulo123', phone:'+36301234567',
-        children:[{id:'c1', name:'Kiss Emma', birthDate:'2021-03-14'}] },
-    ],
-    therapists: [
-      { id:'u_terA', name:'Terapeuta A — Kovács Anna', revolut:'@kovacsanna_terapeuta', bank:'HU00 1111 1111 1111 1111 1111 1111' },
-      { id:'u_terB', name:'Terapeuta B — Szabó Péter', revolut:'@szabopeter_terapeuta', bank:'HU00 2222 2222 2222 2222 2222 2222' },
-      { id:'u_terC', name:'Terapeuta C — Tóth Eszter', revolut:'@tothtera_terapeuta', bank:'HU00 3333 3333 3333 3333 3333 3333' },
-      { id:'u_terD', name:'Terapeuta D — Nagy Zoltán', revolut:'@nagyzoltan_terapeuta', bank:'HU00 4444 4444 4444 4444 4444 4444' },
-    ],
-    rooms: [
-      { id:'r_nagy', name:'Nagy tornaterem', capacity:6, color:'var(--room-nagy)', needsTherapist:true },
-      { id:'r_kis', name:'Kis tornaterem', capacity:1, color:'var(--room-kis)', needsTherapist:true },
-      { id:'r_massz', name:'Masszázsfotel', capacity:1, color:'var(--room-massz)', needsTherapist:false },
-    ],
-    serviceTypes: [
-      { id:'s_szenzoros', name:'Szenzoros torna', price:6000, packageEligible:true, adminOnly:false },
-      { id:'s_gyogytorna', name:'Gyógytorna', price:7000, packageEligible:true, adminOnly:false },
-      { id:'s_mozgas', name:'Mozgásfejlesztés', price:6500, packageEligible:true, adminOnly:false },
-      { id:'s_dszit', name:'DSZIT terápia', price:8000, packageEligible:true, adminOnly:false },
-      { id:'s_logopedia', name:'Logopédia', price:7000, packageEligible:true, adminOnly:false },
-      { id:'s_korai', name:'Korai fejlesztés', price:6500, packageEligible:true, adminOnly:false },
-      { id:'s_gyogyped', name:'Gyógypedagógia', price:7500, packageEligible:true, adminOnly:false },
-      { id:'s_massz', name:'Masszázs', price:5000, packageEligible:false, adminOnly:true },
-    ],
-    packages: [
-      { id:'pkg1', userId:'u_parent1', type:4, remaining:3, purchasedAt: atDay(-10,10,0) },
-    ],
-    slots: [
-      { id:uid('slot'), date: atDay(1,9,0), duration:45, roomId:'r_nagy', therapistId:'u_terA', serviceTypeId:'s_szenzoros', capacity:6, bookedChildIds:[], waitlist:[] },
-      { id:uid('slot'), date: atDay(1,10,0), duration:30, roomId:'r_kis', therapistId:'u_terB', serviceTypeId:'s_logopedia', capacity:1, bookedChildIds:[], waitlist:[] },
-      { id:uid('slot'), date: atDay(2,14,0), duration:45, roomId:'r_nagy', therapistId:'u_terC', serviceTypeId:'s_mozgas', capacity:6, bookedChildIds:[], waitlist:[] },
-      { id:uid('slot'), date: atDay(2,15,0), duration:30, roomId:'r_massz', therapistId:null, serviceTypeId:'s_massz', capacity:1, bookedChildIds:[], waitlist:[] },
-      { id:uid('slot'), date: atDay(3,9,30), duration:45, roomId:'r_kis', therapistId:'u_terD', serviceTypeId:'s_dszit', capacity:1, bookedChildIds:[], waitlist:[] },
-    ],
-    bookings: [],
-  };
+  dbReady = true;
+  const profiles = profilesRes.data || [];
+  const childrenRows = childrenRes.data || [];
+  const therDetails = therRes.data || [];
+
+  db.rooms = (roomsRes.data||[]).map(r=>({ id:r.id, name:r.name, capacity:r.capacity, color:r.color, needsTherapist:r.needs_therapist }));
+  db.serviceTypes = (svcRes.data||[]).map(s=>({ id:s.id, name:s.name, price:s.price, packageEligible:s.package_eligible, adminOnly:s.admin_only }));
+  db.packages = (pkgRes.data||[]).map(p=>({ id:p.id, userId:p.user_id, type:p.type, remaining:p.remaining, purchasedAt:p.purchased_at }));
+  db.bookings = (bookRes.data||[]).map(b=>({ id:b.id, slotId:b.slot_id, parentId:b.parent_id, childId:b.child_id, paymentMethod:b.payment_method, packageUsed:b.package_used, status:b.status, medicalCert:b.medical_cert_url, refund: b.refund_note ? {label:b.refund_note} : null, createdAt:b.created_at }));
+  const waitlistRows = (waitRes.data||[]).map(w=>({ slotId:w.slot_id, childId:w.child_id, parentId:w.parent_id, addedAt:w.added_at }));
+  db.slots = (slotRes.data||[]).map(s=>{
+    const bookedChildIds = db.bookings.filter(b=>b.slotId===s.id && b.status!=='cancelled').map(b=>b.childId);
+    const waitlist = waitlistRows.filter(w=>w.slotId===s.id);
+    return { id:s.id, date:s.date, duration:s.duration, roomId:s.room_id, therapistId:s.therapist_id, serviceTypeId:s.service_type_id, capacity:s.capacity, bookedChildIds, waitlist };
+  });
+  db.therapists = profiles.filter(p=>p.role==='therapist').map(p=>{
+    const det = therDetails.find(d=>d.id===p.id) || {};
+    return { id:p.id, name:p.name, revolut:det.revolut||'', bank:det.bank_account||'' };
+  });
+  db.users = profiles.map(p=>({
+    id:p.id, role:p.role, name:p.name, phone:p.phone||'',
+    children: p.role==='parent' ? childrenRows.filter(c=>c.parent_id===p.id).map(c=>({id:c.id, name:c.name, birthDate:c.birth_date})) : [],
+  }));
 }
 
-function loadDB(){
-  let raw = localStorage.getItem(DB_KEY);
-  if(!raw){ const seeded = seedDB(); localStorage.setItem(DB_KEY, JSON.stringify(seeded)); return seeded; }
-  try { return JSON.parse(raw); } catch(e){ const seeded = seedDB(); localStorage.setItem(DB_KEY, JSON.stringify(seeded)); return seeded; }
+async function loadProfile(userId){
+  const { data, error } = await sb.from('profiles').select('*').eq('id', userId).single();
+  if(!error && data) currentProfile = { id:data.id, role:data.role, name:data.name, phone:data.phone };
 }
-function saveDB(db){ localStorage.setItem(DB_KEY, JSON.stringify(db)); }
-let db = loadDB();
 
-function getSession(){ try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch(e){ return null; } }
-function setSession(userId){ localStorage.setItem(SESSION_KEY, JSON.stringify({userId})); }
-function clearSession(){ localStorage.removeItem(SESSION_KEY); }
-function currentUser(){ const s = getSession(); if(!s) return null; return db.users.find(u=>u.id===s.userId) || null; }
+function currentUser(){
+  if(!currentProfile) return null;
+  return db.users.find(u=>u.id===currentProfile.id) || currentProfile;
+}
 
 function fmtHUF(n){ return n.toLocaleString('hu-HU') + ' Ft'; }
 function fmtDate(iso){ const d = new Date(iso); return d.toLocaleDateString('hu-HU', {year:'numeric',month:'long',day:'numeric'}) + ' ' + d.toLocaleTimeString('hu-HU',{hour:'2-digit',minute:'2-digit'}); }
@@ -386,30 +380,45 @@ toggleRegisterBtn.addEventListener('click', ()=>{
   registerForm.style.display='block'; loginForm.style.display='none'; authError.style.display='none';
 });
 
-loginForm.addEventListener('submit', (e)=>{
+function showAuthError(msg, isOk){
+  authError.textContent = msg;
+  authError.style.display = 'block';
+  authError.style.background = isOk ? 'var(--ok-bg)' : 'var(--danger-bg)';
+  authError.style.color = isOk ? 'var(--teal-deep)' : 'var(--danger)';
+}
+
+loginForm.addEventListener('submit', async (e)=>{
   e.preventDefault();
   const email = document.getElementById('loginEmail').value.trim().toLowerCase();
   const pass = document.getElementById('loginPass').value;
-  const user = db.users.find(u=>u.email.toLowerCase()===email && u.pass===pass);
-  if(!user){ authError.textContent='Hibás e-mail vagy jelszó.'; authError.style.display='block'; return; }
-  setSession(user.id);
+  const submitBtn = loginForm.querySelector('button[type="submit"]'); submitBtn.disabled = true;
+  const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
+  submitBtn.disabled = false;
+  if(error){ showAuthError('Hibás e-mail vagy jelszó.'); return; }
+  await loadProfile(data.user.id);
+  await refreshDB();
   boot();
 });
 
-registerForm.addEventListener('submit', (e)=>{
+registerForm.addEventListener('submit', async (e)=>{
   e.preventDefault();
   const name = document.getElementById('regName').value.trim();
   const email = document.getElementById('regEmail').value.trim().toLowerCase();
   const phone = document.getElementById('regPhone').value.trim();
   const pass = document.getElementById('regPass').value;
-  if(db.users.some(u=>u.email.toLowerCase()===email)){ authError.textContent='Ez az e-mail cím már regisztrálva van.'; authError.style.display='block'; return; }
-  const newUser = { id:uid('u'), role:'parent', name, email, pass, phone, children:[] };
-  db.users.push(newUser); saveDB(db);
-  setSession(newUser.id);
-  boot();
+  const submitBtn = registerForm.querySelector('button[type="submit"]'); submitBtn.disabled = true;
+  const { data, error } = await sb.auth.signUp({ email, password: pass, options: { data: { name, phone } } });
+  submitBtn.disabled = false;
+  if(error){ showAuthError(error.message.includes('registered') ? 'Ez az e-mail cím már regisztrálva van.' : error.message); return; }
+  if(data.session){
+    await loadProfile(data.user.id); await refreshDB(); boot();
+  } else {
+    showAuthError('Sikeres regisztráció! Ha e-mail megerősítés van bekapcsolva a Supabase projektben, nézd meg a postaládád, és utána jelentkezz be.', true);
+    toggleLoginBtn.click();
+  }
 });
 
-function logout(){ clearSession(); location.reload(); }
+async function logout(){ await sb.auth.signOut(); currentProfile = null; location.reload(); }
 
 /* =========================================================
    ROUTER / ALKALMAZÁS VÁZ
@@ -525,38 +534,43 @@ function openBookingModal(user, slotId){
   `);
 }
 
-function confirmBooking(user, slotId){
+async function confirmBooking(user, slotId){
   const s = db.slots.find(x=>x.id===slotId);
   const childId = document.getElementById('bookChild').value;
   const payMethod = document.querySelector('input[name="payMethod"]:checked')?.value;
-  const service = serviceOf(s.serviceTypeId);
-  let status, packageUsed=false;
-  if(payMethod==='package'){
-    const pkg = db.packages.find(p=>p.userId===user.id && p.remaining>0);
-    pkg.remaining -= 1; packageUsed=true; status='confirmed';
-  } else if(payMethod==='gateway'){
+  if(payMethod==='gateway'){
     toast('Az online fizetési kapu integrációja még nincs bekötve — válassz Revolutot vagy banki átutalást.');
     return;
-  } else {
-    status='pending';
   }
-  s.bookedChildIds.push(childId);
-  const booking = { id:uid('bk'), slotId, parentId:user.id, childId, paymentMethod:payMethod, packageUsed, status, createdAt:new Date().toISOString(), medicalCert:null };
-  db.bookings.push(booking);
-  saveDB(db);
+  let status = 'pending', packageUsed = false, pkg = null;
+  if(payMethod==='package'){
+    pkg = db.packages.find(p=>p.userId===user.id && p.remaining>0);
+    if(!pkg){ toast('Nincs elérhető bérleted.'); return; }
+    packageUsed = true; status = 'confirmed';
+  }
+  if(packageUsed){
+    const { error: pkgErr } = await sb.from('packages').update({ remaining: pkg.remaining - 1 }).eq('id', pkg.id);
+    if(pkgErr){ toast('Hiba a bérlet frissítésekor: ' + pkgErr.message); return; }
+  }
+  const { data, error } = await sb.from('bookings').insert({
+    slot_id: slotId, parent_id: user.id, child_id: childId,
+    payment_method: payMethod, package_used: packageUsed, status,
+  }).select().single();
+  if(error){ toast('Hiba a foglaláskor: ' + error.message); return; }
   closeModal();
   toast(status==='confirmed' ? 'Foglalás megerősítve — bérletből levonva!' : 'Foglalás rögzítve, fizetésre vár. Nézd meg a "Foglalásaim" fülön az átutalási adatokat!');
+  await refreshDB();
   boot();
-  offerIcsDownload(booking, s);
+  offerIcsDownload({ id:data.id }, s);
 }
 
-function confirmWaitlist(user, slotId){
-  const s = db.slots.find(x=>x.id===slotId);
+async function confirmWaitlist(user, slotId){
   const childId = document.getElementById('bookChild').value;
-  s.waitlist.push({ childId, parentId:user.id, addedAt:new Date().toISOString() });
-  saveDB(db);
+  const { error } = await sb.from('waitlist').insert({ slot_id: slotId, parent_id: user.id, child_id: childId });
+  if(error){ toast('Hiba a várólistára iratkozáskor: ' + error.message); return; }
   closeModal();
   toast('Sikeresen feliratkoztál a várólistára — ha felszabadul a hely, admin kollégáink értesítenek.');
+  await refreshDB();
   boot();
 }
 
@@ -632,22 +646,24 @@ function openCancelModal(user, bookingId){
   });
 }
 
-function doCancel(user, bookingId){
+async function doCancel(user, bookingId){
   const b = db.bookings.find(x=>x.id===bookingId);
   const s = db.slots.find(x=>x.id===b.slotId);
   const hasCert = document.getElementById('medCertCheck').checked;
   const tier = hasCert ? {label:'Orvosi igazolással — 100% visszatérítés', refundPct:100} : cancellationTier(s.date);
-  b.status = 'cancelled';
-  b.medicalCert = hasCert ? 'feltöltve (demó — nincs valós tárhely)' : null;
-  b.refund = tier;
+  const { error } = await sb.from('bookings').update({
+    status: 'cancelled',
+    medical_cert_url: hasCert ? 'jelölve (fájlfeltöltés a következő lépésben lesz bekötve)' : null,
+    refund_note: tier.label,
+  }).eq('id', bookingId);
+  if(error){ toast('Hiba a lemondáskor: ' + error.message); return; }
   if(b.packageUsed && tier.refundPct===100){
     const pkg = db.packages.find(p=>p.userId===user.id);
-    if(pkg) pkg.remaining += 1;
+    if(pkg) await sb.from('packages').update({ remaining: pkg.remaining + 1 }).eq('id', pkg.id);
   }
-  s.bookedChildIds = s.bookedChildIds.filter(id=>id!==b.childId);
-  saveDB(db);
   closeModal();
   toast('Foglalás lemondva. ' + tier.label + '.');
+  await refreshDB();
   boot();
 }
 
@@ -794,15 +810,15 @@ function viewAdminCerts(user){
    ========================================================= */
 function viewAdminTherapists(user){
   const rows = db.therapists.map(t=>`<tr>
-    <td>${t.name}</td><td>${userOf(t.id)?.email||'—'}</td><td>${t.revolut}</td><td style="font-size:0.78rem;">${t.bank}</td>
+    <td>${t.name}<br><span class="muted" style="font-size:0.72rem;">UID: ${t.id}</span></td><td>${t.revolut}</td><td style="font-size:0.78rem;">${t.bank}</td>
     <td style="white-space:nowrap;"><button class="btn btn-ghost btn-sm" data-edit-therapist="${t.id}">Szerkesztés</button> <button class="btn btn-danger btn-sm" data-delete-therapist="${t.id}">Törlés</button></td>
-  </tr>`).join('') || '<tr><td colspan="5" class="muted">Nincs felvett terapeuta.</td></tr>';
+  </tr>`).join('') || '<tr><td colspan="4" class="muted">Nincs felvett terapeuta.</td></tr>';
   return `<div class="card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
       <h3 class="section-title" style="margin:0;">Terapeuták</h3>
       <button class="btn btn-primary btn-sm" data-add-therapist>+ Új terapeuta</button>
     </div>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Név</th><th>E-mail</th><th>Revolut</th><th>Bankszámla</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Név</th><th>Revolut</th><th>Bankszámla</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
   </div>`;
 }
 
@@ -813,40 +829,38 @@ function openTherapistModal(mode, therapistId){
   openModal(`
     <button class="modal-close" data-close>&times;</button>
     <h3>${isEdit?'Terapeuta szerkesztése':'Új terapeuta felvétele'}</h3>
+    ${!isEdit ? `<p class="muted" style="margin-top:8px;">Előbb hozd létre a bejelentkezését a Supabase Dashboardon (Authentication → Users → Add user), utána másold ide a ott kapott <strong>User UID</strong>-ot.</p>` : ''}
     <form id="therapistForm" style="margin-top:16px;">
+      ${!isEdit ? `<div class="field"><label for="terUid">Supabase User UID</label><input type="text" id="terUid" placeholder="pl. 8f2c1e40-....-....-...." required></div>` : ''}
       <div class="field"><label for="terName">Név</label><input type="text" id="terName" value="${isEdit?u.name:''}" required></div>
-      <div class="field"><label for="terEmail">E-mail (belépéshez)</label><input type="email" id="terEmail" value="${isEdit?u.email:''}" required></div>
-      ${!isEdit ? `<div class="field"><label for="terPass">Kezdeti jelszó</label><input type="text" id="terPass" required minlength="4"></div>` : `<p class="muted" style="margin-bottom:14px;">A jelszó módosítása jelenleg nem elérhető a demóban.</p>`}
       <div class="field"><label for="terRevolut">Revolut felhasználónév</label><input type="text" id="terRevolut" value="${isEdit?t.revolut:''}" required></div>
       <div class="field"><label for="terBank">Bankszámlaszám (IBAN)</label><input type="text" id="terBank" value="${isEdit?t.bank:''}" required></div>
       <button type="submit" class="btn btn-primary btn-block">${isEdit?'Mentés':'Felvétel'}</button>
     </form>
   `);
-  document.getElementById('therapistForm').addEventListener('submit', (e)=>{
+  document.getElementById('therapistForm').addEventListener('submit', async (e)=>{
     e.preventDefault();
     const name = document.getElementById('terName').value.trim();
-    const email = document.getElementById('terEmail').value.trim().toLowerCase();
     const revolut = document.getElementById('terRevolut').value.trim();
     const bank = document.getElementById('terBank').value.trim();
-    if(isEdit){
-      u.name = name; u.email = email; t.name = name; t.revolut = revolut; t.bank = bank;
-    } else {
-      if(db.users.some(x=>x.email.toLowerCase()===email)){ toast('Ez az e-mail cím már foglalt.'); return; }
-      const pass = document.getElementById('terPass').value;
-      const id = uid('u');
-      db.users.push({ id, role:'therapist', name, email, pass, phone:'', children:[] });
-      db.therapists.push({ id, name, revolut, bank });
-    }
-    saveDB(db); closeModal(); toast(isEdit?'Terapeuta adatai frissítve.':'Terapeuta felvéve.'); boot();
+    const id = isEdit ? therapistId : document.getElementById('terUid').value.trim();
+    const { error: profErr } = await sb.from('profiles').update({ role:'therapist', name }).eq('id', id);
+    if(profErr){ toast('Hiba: ' + profErr.message + ' — biztosan létezik ilyen UID-jú felhasználó?'); return; }
+    const { error: detErr } = await sb.from('therapist_details').upsert({ id, revolut, bank_account: bank });
+    if(detErr){ toast('Hiba a fizetési adatoknál: ' + detErr.message); return; }
+    closeModal(); toast(isEdit?'Terapeuta adatai frissítve.':'Terapeuta felvéve.');
+    await refreshDB(); boot();
   });
 }
 
-function deleteTherapist(therapistId){
+async function deleteTherapist(therapistId){
   const hasUpcoming = db.slots.some(s=>s.therapistId===therapistId && new Date(s.date)>new Date());
   if(hasUpcoming){ toast('Ehhez a terapeutához vannak jövőbeli meghirdetett órák — előbb töröld vagy rendeld át azokat.'); return; }
-  db.therapists = db.therapists.filter(t=>t.id!==therapistId);
-  db.users = db.users.filter(u=>u.id!==therapistId);
-  saveDB(db); toast('Terapeuta törölve.'); boot();
+  await sb.from('therapist_details').delete().eq('id', therapistId);
+  const { error } = await sb.from('profiles').update({ role:'parent' }).eq('id', therapistId);
+  if(error){ toast('Hiba a törléskor: ' + error.message); return; }
+  toast('Terapeuta törölve (a bejelentkezését a Supabase Dashboardon tudod véglegesen törölni).');
+  await refreshDB(); boot();
 }
 
 /* =========================================================
@@ -883,15 +897,19 @@ function openRoomModal(mode, roomId){
       <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">${isEdit?'Mentés':'Felvétel'}</button>
     </form>
   `);
-  document.getElementById('roomForm').addEventListener('submit', (e)=>{
+  document.getElementById('roomForm').addEventListener('submit', async (e)=>{
     e.preventDefault();
     const name = document.getElementById('roomName').value.trim();
     const capacity = parseInt(document.getElementById('roomCapacity').value,10);
     const color = document.getElementById('roomColor').value;
     const needsTherapist = document.getElementById('roomNeedsTherapist').checked;
-    if(isEdit){ r.name=name; r.capacity=capacity; r.color=color; r.needsTherapist=needsTherapist; }
-    else { db.rooms.push({ id:uid('room'), name, capacity, color, needsTherapist }); }
-    saveDB(db); closeModal(); toast(isEdit?'Helyiség frissítve.':'Helyiség felvéve.'); boot();
+    const payload = { name, capacity, color, needs_therapist: needsTherapist };
+    const { error } = isEdit
+      ? await sb.from('rooms').update(payload).eq('id', roomId)
+      : await sb.from('rooms').insert(payload);
+    if(error){ toast('Hiba: ' + error.message); return; }
+    closeModal(); toast(isEdit?'Helyiség frissítve.':'Helyiség felvéve.');
+    await refreshDB(); boot();
   });
 }
 /* var(--room-x) CSS-változókat hex-re váltjuk a color inputhoz, mert az csak hex/rgb-t fogad */
@@ -900,11 +918,12 @@ function toHex(cssColor){
   return map[cssColor] || (cssColor.startsWith('#') ? cssColor : '#1E8F76');
 }
 
-function deleteRoom(roomId){
+async function deleteRoom(roomId){
   const hasUpcoming = db.slots.some(s=>s.roomId===roomId && new Date(s.date)>new Date());
   if(hasUpcoming){ toast('Ehhez a helyiséghez vannak jövőbeli meghirdetett órák — előbb töröld vagy helyezd át azokat.'); return; }
-  db.rooms = db.rooms.filter(r=>r.id!==roomId);
-  saveDB(db); toast('Helyiség törölve.'); boot();
+  const { error } = await sb.from('rooms').delete().eq('id', roomId);
+  if(error){ toast('Hiba a törléskor: ' + error.message); return; }
+  toast('Helyiség törölve.'); await refreshDB(); boot();
 }
 
 /* =========================================================
@@ -938,23 +957,28 @@ function openServiceModal(mode, serviceId){
       <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">${isEdit?'Mentés':'Felvétel'}</button>
     </form>
   `);
-  document.getElementById('serviceForm').addEventListener('submit', (e)=>{
+  document.getElementById('serviceForm').addEventListener('submit', async (e)=>{
     e.preventDefault();
     const name = document.getElementById('svcName').value.trim();
     const price = parseInt(document.getElementById('svcPrice').value,10);
     const packageEligible = document.getElementById('svcPackageEligible').checked;
     const adminOnly = document.getElementById('svcAdminOnly').checked;
-    if(isEdit){ s.name=name; s.price=price; s.packageEligible=packageEligible; s.adminOnly=adminOnly; }
-    else { db.serviceTypes.push({ id:uid('svc'), name, price, packageEligible, adminOnly }); }
-    saveDB(db); closeModal(); toast(isEdit?'Szolgáltatás frissítve.':'Szolgáltatás felvéve.'); boot();
+    const payload = { name, price, package_eligible: packageEligible, admin_only: adminOnly };
+    const { error } = isEdit
+      ? await sb.from('service_types').update(payload).eq('id', serviceId)
+      : await sb.from('service_types').insert(payload);
+    if(error){ toast('Hiba: ' + error.message); return; }
+    closeModal(); toast(isEdit?'Szolgáltatás frissítve.':'Szolgáltatás felvéve.');
+    await refreshDB(); boot();
   });
 }
 
-function deleteService(serviceId){
+async function deleteService(serviceId){
   const hasUpcoming = db.slots.some(s=>s.serviceTypeId===serviceId && new Date(s.date)>new Date());
   if(hasUpcoming){ toast('Ehhez a szolgáltatáshoz vannak jövőbeli meghirdetett órák — előbb töröld vagy módosítsd azokat.'); return; }
-  db.serviceTypes = db.serviceTypes.filter(s=>s.id!==serviceId);
-  saveDB(db); toast('Szolgáltatás törölve.'); boot();
+  const { error } = await sb.from('service_types').delete().eq('id', serviceId);
+  if(error){ toast('Hiba a törléskor: ' + error.message); return; }
+  toast('Szolgáltatás törölve.'); await refreshDB(); boot();
 }
 
 /* =========================================================
@@ -980,27 +1004,34 @@ function attachViewHandlers(user, tab){
     btn.addEventListener('click', ()=> openCancelModal(user, btn.dataset.cancelBooking));
   });
   root.querySelectorAll('[data-delete-slot]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      db.slots = db.slots.filter(s=>s.id!==btn.dataset.deleteSlot);
-      saveDB(db); toast('Időpont törölve.'); boot();
+    btn.addEventListener('click', async ()=>{
+      const { error } = await sb.from('slots').delete().eq('id', btn.dataset.deleteSlot);
+      if(error){ toast('Hiba a törléskor: ' + error.message); return; }
+      toast('Időpont törölve.'); await refreshDB(); boot();
     });
   });
   root.querySelectorAll('[data-mark-paid]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const b = db.bookings.find(x=>x.id===btn.dataset.markPaid);
-      b.status='confirmed'; saveDB(db); toast('Foglalás visszaigazolva fizetettként.'); boot();
+    btn.addEventListener('click', async ()=>{
+      const { error } = await sb.from('bookings').update({ status:'confirmed' }).eq('id', btn.dataset.markPaid);
+      if(error){ toast('Hiba: ' + error.message); return; }
+      toast('Foglalás visszaigazolva fizetettként.'); await refreshDB(); boot();
     });
   });
 
   const addChildForm = document.getElementById('addChildForm');
-  if(addChildForm) addChildForm.addEventListener('submit', (e)=>{
+  if(addChildForm) addChildForm.addEventListener('submit', async (e)=>{
     e.preventDefault();
-    user.children.push({ id:uid('c'), name:document.getElementById('childName').value.trim(), birthDate:document.getElementById('childBirth').value });
-    saveDB(db); toast('Gyermek hozzáadva.'); boot();
+    const { error } = await sb.from('children').insert({
+      parent_id: user.id,
+      name: document.getElementById('childName').value.trim(),
+      birth_date: document.getElementById('childBirth').value,
+    });
+    if(error){ toast('Hiba: ' + error.message); return; }
+    toast('Gyermek hozzáadva.'); await refreshDB(); boot();
   });
 
   const addSlotForm = document.getElementById('addSlotForm');
-  if(addSlotForm) addSlotForm.addEventListener('submit', (e)=>{
+  if(addSlotForm) addSlotForm.addEventListener('submit', async (e)=>{
     e.preventDefault();
     const mode = addSlotForm.dataset.mode;
     const roomId = document.getElementById('slotRoom').value;
@@ -1015,23 +1046,25 @@ function attachViewHandlers(user, tab){
     } else {
       therapistId = document.getElementById('slotTherapist').value || null;
     }
-    db.slots.push({
-      id:uid('slot'),
+    const { error } = await sb.from('slots').insert({
       date: new Date(document.getElementById('slotDate').value).toISOString(),
       duration: parseInt(document.getElementById('slotDuration').value,10),
-      roomId, therapistId,
-      serviceTypeId,
-      capacity: room.capacity, bookedChildIds:[], waitlist:[],
+      room_id: roomId, therapist_id: therapistId, service_type_id: serviceTypeId,
+      capacity: room.capacity,
     });
-    saveDB(db); toast('Időpont meghirdetve.'); boot();
+    if(error){ toast('Hiba: ' + error.message); return; }
+    toast('Időpont meghirdetve.'); await refreshDB(); boot();
   });
 
   const addPackageForm = document.getElementById('addPackageForm');
-  if(addPackageForm) addPackageForm.addEventListener('submit', (e)=>{
+  if(addPackageForm) addPackageForm.addEventListener('submit', async (e)=>{
     e.preventDefault();
     const type = parseInt(document.getElementById('pkgType').value,10);
-    db.packages.push({ id:uid('pkg'), userId:document.getElementById('pkgParent').value, type, remaining:type, purchasedAt:new Date().toISOString() });
-    saveDB(db); toast('Bérlet hozzáadva.'); boot();
+    const { error } = await sb.from('packages').insert({
+      user_id: document.getElementById('pkgParent').value, type, remaining: type,
+    });
+    if(error){ toast('Hiba: ' + error.message); return; }
+    toast('Bérlet hozzáadva.'); await refreshDB(); boot();
   });
 
   // naptár navigáció
@@ -1068,7 +1101,18 @@ document.addEventListener('click', (e)=>{
 /* =========================================================
    INDÍTÁS
    ========================================================= */
-boot();
+async function init(){
+  const { data: { session } } = await sb.auth.getSession();
+  if(session){
+    await loadProfile(session.user.id);
+    await refreshDB();
+  }
+  boot();
+}
+sb.auth.onAuthStateChange((event) => {
+  if(event === 'SIGNED_OUT'){ currentProfile = null; boot(); }
+});
+init();
 </script>
 </body>
 </html>
