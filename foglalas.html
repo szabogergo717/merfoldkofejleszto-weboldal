@@ -181,6 +181,21 @@ footer.app-footer{text-align:center;padding:30px 0;color:var(--ink-soft);font-si
       <div class="field"><label for="loginEmail">E-mail</label><input type="email" id="loginEmail" required></div>
       <div class="field"><label for="loginPass">Jelszó</label><input type="password" id="loginPass" required></div>
       <button type="submit" class="btn btn-primary btn-block">Belépés</button>
+      <button type="button" id="forgotPasswordLink" class="helper-back" style="margin-top:14px;color:var(--ink-soft);text-decoration:underline;">Elfelejtetted a jelszavad?</button>
+    </form>
+
+    <form id="forgotPasswordForm" style="display:none;">
+      <p class="muted" style="margin-bottom:14px;">Add meg az e-mail címed, és küldünk egy linket, amivel új jelszót állíthatsz be.</p>
+      <div class="field"><label for="forgotEmail">E-mail</label><input type="email" id="forgotEmail" required></div>
+      <button type="submit" class="btn btn-primary btn-block">Visszaállító link küldése</button>
+      <button type="button" id="backToLoginLink" class="helper-back" style="margin-top:14px;color:var(--ink-soft);text-decoration:underline;">← Vissza a bejelentkezéshez</button>
+    </form>
+
+    <form id="resetPasswordForm" style="display:none;">
+      <p class="muted" style="margin-bottom:14px;">Add meg az új jelszavadat.</p>
+      <div class="field"><label for="newPass1">Új jelszó</label><input type="password" id="newPass1" required minlength="4"></div>
+      <div class="field"><label for="newPass2">Új jelszó mégegyszer</label><input type="password" id="newPass2" required minlength="4"></div>
+      <button type="submit" class="btn btn-primary btn-block">Jelszó mentése</button>
     </form>
 
     <form id="registerForm" style="display:none;">
@@ -362,22 +377,66 @@ function toast(msg){
 }
 
 /* =========================================================
-   AUTHENTIKÁCIÓ (demó — jelszó egyszerű szövegként tárolva!
-   Éles rendszerben ez SOHA nem elfogadható, valós auth kell.)
+   AUTHENTIKÁCIÓ (Supabase Auth — valós, biztonságos jelszókezelés)
    ========================================================= */
 const toggleLoginBtn = document.getElementById('toggleLogin');
 const toggleRegisterBtn = document.getElementById('toggleRegister');
 const loginForm = document.getElementById('loginForm');
 const registerForm = document.getElementById('registerForm');
+const forgotPasswordForm = document.getElementById('forgotPasswordForm');
+const resetPasswordForm = document.getElementById('resetPasswordForm');
 const authError = document.getElementById('authError');
+const authToggleRow = document.querySelector('.auth-toggle');
+const demoAccountsBox = document.querySelector('.demo-accounts');
+
+function showAuthForm(which){
+  loginForm.style.display = which==='login' ? 'block' : 'none';
+  registerForm.style.display = which==='register' ? 'block' : 'none';
+  forgotPasswordForm.style.display = which==='forgot' ? 'block' : 'none';
+  resetPasswordForm.style.display = which==='reset' ? 'block' : 'none';
+  authToggleRow.style.display = (which==='login' || which==='register') ? 'flex' : 'none';
+  demoAccountsBox.style.display = (which==='login' || which==='register') ? 'block' : 'none';
+  authError.style.display = 'none';
+}
 
 toggleLoginBtn.addEventListener('click', ()=>{
   toggleLoginBtn.classList.add('active'); toggleRegisterBtn.classList.remove('active');
-  loginForm.style.display='block'; registerForm.style.display='none'; authError.style.display='none';
+  showAuthForm('login');
 });
 toggleRegisterBtn.addEventListener('click', ()=>{
   toggleRegisterBtn.classList.add('active'); toggleLoginBtn.classList.remove('active');
-  registerForm.style.display='block'; loginForm.style.display='none'; authError.style.display='none';
+  showAuthForm('register');
+});
+document.getElementById('forgotPasswordLink').addEventListener('click', ()=> showAuthForm('forgot'));
+document.getElementById('backToLoginLink').addEventListener('click', ()=> showAuthForm('login'));
+
+forgotPasswordForm.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const email = document.getElementById('forgotEmail').value.trim().toLowerCase();
+  const submitBtn = forgotPasswordForm.querySelector('button[type="submit"]'); submitBtn.disabled = true;
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + window.location.pathname });
+  submitBtn.disabled = false;
+  showAuthForm('forgot');
+  showAuthError('Ha ez a cím regisztrálva van nálunk, hamarosan kapsz egy e-mailt a jelszó-visszaállító linkkel. Nézd meg a spam mappát is!', true);
+});
+
+resetPasswordForm.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const p1 = document.getElementById('newPass1').value;
+  const p2 = document.getElementById('newPass2').value;
+  if(p1 !== p2){ showAuthForm('reset'); showAuthError('A két jelszó nem egyezik.'); return; }
+  const submitBtn = resetPasswordForm.querySelector('button[type="submit"]'); submitBtn.disabled = true;
+  const { error } = await sb.auth.updateUser({ password: p1 });
+  submitBtn.disabled = false;
+  if(error){ showAuthForm('reset'); showAuthError('Hiba történt: ' + error.message); return; }
+  showAuthForm('login');
+  showAuthError('Jelszavad megváltozott — most már bejelentkezhetsz az új jelszóval.', true);
+});
+
+// Supabase a jelszó-visszaállító e-mail linkjére kattintva ideiglenes munkamenetet ad,
+// és ezt az eseményt küldi — ekkor mutatjuk az "új jelszó" űrlapot.
+sb.auth.onAuthStateChange((event) => {
+  if(event === 'PASSWORD_RECOVERY'){ showAuthForm('reset'); }
 });
 
 function showAuthError(msg, isOk){
