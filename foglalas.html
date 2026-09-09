@@ -501,7 +501,7 @@ function boot(){
 
   const tabsByRole = {
     parent: [['book','Naptár & Foglalás'],['mybookings','Foglalásaim'],['children','Gyermekeim'],['packages','Bérletem']],
-    therapist: [['calendar','Csapatnaptár'],['announce','Saját órák kiírása']],
+    therapist: [['calendar','Csapatnaptár'],['announce','Saját órák kiírása'],['payments','Fizetések']],
     admin: [['calendar','Naptár'],['manage_bookings','Foglalások / fizetések'],['manage_packages','Bérletek'],['manage_certs','Orvosi igazolások'],['manage_therapists','Terapeuták'],['manage_rooms','Helyiségek'],['manage_services','Szolgáltatások & árak']],
   };
   const tabs = tabsByRole[user.role];
@@ -526,6 +526,7 @@ function renderView(user, tab){
   if(user.role==='therapist'){
     if(tab==='calendar') root.innerHTML = viewTherapistTeamCalendar(user);
     if(tab==='announce') root.innerHTML = viewTherapistAnnounce(user);
+    if(tab==='payments') root.innerHTML = viewTherapistPayments(user);
   }
   if(user.role==='admin'){
     if(tab==='calendar') root.innerHTML = viewAdminCalendar(user);
@@ -588,11 +589,12 @@ function openBookingModal(user, slotId){
         <label class="pay-option"><input type="radio" name="payMethod" value="gateway" ${!activePkg?'checked':''}><strong>Online fizetési kapu <span class="badge-inline">Hamarosan</span></strong><span>Bankkártyás fizetés (Barion/Stripe — integráció folyamatban)</span></label>
         <label class="pay-option"><input type="radio" name="payMethod" value="revolut"><strong>Revolut</strong><span>${revolutInfo}</span></label>
         <label class="pay-option"><input type="radio" name="payMethod" value="bank"><strong>Banki átutalás</strong><span>${bankInfo}</span></label>
+        <label class="pay-option"><input type="radio" name="payMethod" value="cash"><strong>Készpénz a helyszínen</strong><span>Fizetés az alkalom napján, azonnal megerősített foglalás</span></label>
       </div>
     </fieldset>
     <div class="pay-detail-box"><div><span>Fizetendő</span><span><strong>${fmtHUF(service.price)}</strong></span></div></div>
     <button class="btn btn-primary btn-block" style="margin-top:16px;" id="confirmBooking" data-slot="${s.id}">Foglalás megerősítése</button>
-    <p class="muted" style="margin-top:10px;font-size:0.78rem;">Banki átutalás / Revolut választása esetén a foglalás "fizetésre vár" státusszal jön létre, az admin igazolja vissza a beérkezett utalást.</p>
+    <p class="muted" style="margin-top:10px;font-size:0.78rem;">Banki átutalás / Revolut választása esetén a foglalás "fizetésre vár" státusszal jön létre, a terapeuta vagy az admin igazolja vissza a beérkezett fizetést. Készpénzes fizetésnél a foglalás azonnal megerősítésre kerül.</p>
     `}
   `);
 }
@@ -610,6 +612,8 @@ async function confirmBooking(user, slotId){
     pkg = db.packages.find(p=>p.userId===user.id && p.remaining>0);
     if(!pkg){ toast('Nincs elérhető bérleted.'); return; }
     packageUsed = true; status = 'confirmed';
+  } else if(payMethod==='cash'){
+    status = 'confirmed';
   }
   if(packageUsed){
     const { error: pkgErr } = await sb.from('packages').update({ remaining: pkg.remaining - 1 }).eq('id', pkg.id);
@@ -621,7 +625,8 @@ async function confirmBooking(user, slotId){
   }).select().single();
   if(error){ toast('Hiba a foglaláskor: ' + error.message); return; }
   closeModal();
-  toast(status==='confirmed' ? 'Foglalás megerősítve — bérletből levonva!' : 'Foglalás rögzítve, fizetésre vár. Nézd meg a "Foglalásaim" fülön az átutalási adatokat!');
+  toast(status==='confirmed' ? 'Foglalás megerősítve!' : 'Foglalás rögzítve, fizetésre vár. Nézd meg a "Foglalásaim" fülön az átutalási adatokat!');
+  notifyNewBooking(data.id).catch(()=>{});
   await refreshDB();
   boot();
   offerIcsDownload({ id:data.id }, s);
@@ -638,6 +643,16 @@ async function confirmWaitlist(user, slotId){
 }
 
 /* .ics naptárfájl generálás — ez valóban működik szerver nélkül is */
+/* Értesítő e-mail a terapeutának és az adminnak — egy Supabase Edge Function-t hív meg.
+   Ha a függvény még nincs telepítve, ez csendben elbukik (a foglalás attól még létrejön). */
+async function notifyNewBooking(bookingId){
+  await fetch(SUPABASE_URL + '/functions/v1/send-booking-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SUPABASE_ANON_KEY },
+    body: JSON.stringify({ bookingId }),
+  });
+}
+
 function offerIcsDownload(booking, slot){
   const service = serviceOf(slot.serviceTypeId);
   const start = new Date(slot.date);
@@ -683,7 +698,7 @@ function viewMyBookings(user){
   return `<div class="card"><h3 class="section-title">Foglalásaim</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szolgáltatás</th><th>Gyermek</th><th>Időpont</th><th>Fizetés</th><th>Státusz</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 function room2label(id){ return roomOf(id).name; }
-function payLabel(m){ return {gateway:'Online kapu', revolut:'Revolut', bank:'Banki átutalás'}[m] || m; }
+function payLabel(m){ return {gateway:'Online kapu', revolut:'Revolut', bank:'Banki átutalás', cash:'Készpénz helyszínen'}[m] || m; }
 
 function openCancelModal(user, bookingId){
   const b = db.bookings.find(x=>x.id===bookingId);
@@ -773,7 +788,8 @@ function viewTherapistAnnounce(user){
   });
   const roomOpts = db.rooms.filter(r=>r.needsTherapist).map(r=>`<option value="${r.id}">${r.name} (max ${r.capacity} fő)</option>`).join('');
   const serviceOpts = db.serviceTypes.filter(s=>!s.adminOnly).map(s=>`<option value="${s.id}">${s.name} — ${fmtHUF(s.price)}</option>`).join('');
-  return `<div class="card" style="margin-bottom:24px;"><h3 class="section-title">Új óra kiírása</h3>
+  return `<div class="grid-2" style="margin-bottom:24px;">
+    <div class="card"><h3 class="section-title">Új óra kiírása</h3>
       <form id="addSlotForm" data-mode="therapist">
         <div class="field"><label for="slotDate">Dátum és idő</label><input type="datetime-local" id="slotDate" required></div>
         <div class="field"><label for="slotDuration">Időtartam (perc)</label><input type="number" id="slotDuration" value="45" min="10" required></div>
@@ -783,7 +799,38 @@ function viewTherapistAnnounce(user){
         <button type="submit" class="btn btn-primary btn-block">Meghirdetés</button>
       </form>
     </div>
+    <div class="card"><h3 class="section-title">Új foglalkozás típus felvétele</h3>
+      <p class="muted" style="margin-bottom:14px;">Ha olyan foglalkozást tartasz, ami még nincs a listában, itt felveheted a nevét és az árát — utána azonnal választható lesz a bal oldali űrlapon.</p>
+      <form id="addServiceTherapistForm">
+        <div class="field"><label for="tSvcName">Foglalkozás neve</label><input type="text" id="tSvcName" required></div>
+        <div class="field"><label for="tSvcPrice">Ár (Ft)</label><input type="number" id="tSvcPrice" min="0" step="500" value="6000" required></div>
+        <div class="checkbox-row"><input type="checkbox" id="tSvcPackageEligible" checked><label for="tSvcPackageEligible">Igénybe vehető bérlettel (4-es / 8-as)</label></div>
+        <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">Felvétel</button>
+      </form>
+    </div>
+  </div>
     <div class="card"><h3 class="section-title">Saját meghirdetett óráim</h3>${calendar}</div>`;
+}
+
+function viewTherapistPayments(user){
+  const mySlotIds = new Set(db.slots.filter(s=>s.therapistId===user.id).map(s=>s.id));
+  const mine = db.bookings.filter(b=>mySlotIds.has(b.slotId)).slice().sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  if(mine.length===0) return '<div class="card empty-state">Még nincs foglalás a saját óráidra.</div>';
+  const rows = mine.map(b=>{
+    const s = db.slots.find(x=>x.id===b.slotId); const service = serviceOf(s.serviceTypeId);
+    const parent = userOf(b.parentId); const child = parent ? parent.children.find(c=>c.id===b.childId) : null;
+    const statusLabel = {confirmed:'Megerősítve', pending:'Fizetésre vár', cancelled:'Lemondva'}[b.status];
+    const canMarkPaid = b.status==='pending';
+    return `<tr>
+      <td>${parent?parent.name:'—'}<br><span class="muted">${child?child.name:''}</span></td>
+      <td>${service.name}</td>
+      <td>${fmtDate(s.date)}</td>
+      <td>${b.packageUsed ? 'Bérlet' : payLabel(b.paymentMethod)}</td>
+      <td><span class="status-badge status-${b.status}">${statusLabel}</span></td>
+      <td>${canMarkPaid ? `<button class="btn btn-primary btn-sm" data-mark-paid="${b.id}">Fizetve — visszaigazolás</button>` : ''}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="card"><h3 class="section-title">Saját óráim foglalásai & fizetései</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő / gyermek</th><th>Szolgáltatás</th><th>Időpont</th><th>Fizetés</th><th>Státusz</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
 /* =========================================================
@@ -1091,6 +1138,19 @@ function attachViewHandlers(user, tab){
     });
     if(error){ toast('Hiba: ' + error.message); return; }
     toast('Gyermek hozzáadva.'); await refreshDB(); boot();
+  });
+
+  const addServiceTherapistForm = document.getElementById('addServiceTherapistForm');
+  if(addServiceTherapistForm) addServiceTherapistForm.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const { error } = await sb.from('service_types').insert({
+      name: document.getElementById('tSvcName').value.trim(),
+      price: parseInt(document.getElementById('tSvcPrice').value,10),
+      package_eligible: document.getElementById('tSvcPackageEligible').checked,
+      admin_only: false,
+    });
+    if(error){ toast('Hiba: ' + error.message); return; }
+    toast('Foglalkozás típus felvéve — most már választható az óra kiírásánál.'); await refreshDB(); boot();
   });
 
   const addSlotForm = document.getElementById('addSlotForm');
