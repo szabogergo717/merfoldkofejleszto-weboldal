@@ -271,7 +271,7 @@ async function refreshDB(){
   const childrenRows = childrenRes.data || [];
   const therDetails = therRes.data || [];
 
-  db.rooms = (roomsRes.data||[]).map(r=>({ id:r.id, name:r.name, capacity:r.capacity, color:r.color, needsTherapist:r.needs_therapist, rentalFee:r.rental_fee||0 }));
+  db.rooms = (roomsRes.data||[]).map(r=>({ id:r.id, name:r.name, capacity:r.capacity, color:r.color, needsTherapist:r.needs_therapist, rentalFee:r.rental_fee||0, rentalFeeGroup:r.rental_fee_group||0 }));
   db.serviceTypes = (svcRes.data||[]).map(s=>({ id:s.id, name:s.name, price:s.price, packageEligible:s.package_eligible, adminOnly:s.admin_only, therapistId:s.therapist_id||null }));
   db.packages = (pkgRes.data||[]).map(p=>({ id:p.id, userId:p.user_id, type:p.type, remaining:p.remaining, purchasedAt:p.purchased_at }));
   db.bookings = (bookRes.data||[]).map(b=>({ id:b.id, slotId:b.slot_id, parentId:b.parent_id, childId:b.child_id, paymentMethod:b.payment_method, packageUsed:b.package_used, status:b.status, medicalCert:b.medical_cert_url, refund: b.refund_note ? {label:b.refund_note} : null, createdAt:b.created_at, cancelledAt:b.cancelled_at }));
@@ -698,7 +698,10 @@ function viewMyBookings(user){
     const s = db.slots.find(x=>x.id===b.slotId); const service = serviceOf(s.serviceTypeId); const child = user.children.find(c=>c.id===b.childId);
     const statusLabel = {confirmed:'Megerősítve', pending:'Fizetésre vár', cancelled:'Lemondva'}[b.status];
     const statusClass = 'status-'+b.status;
-    const canCancel = b.status!=='cancelled' && new Date(s.date) > new Date();
+    const hoursUntil = (new Date(s.date) - new Date())/36e5;
+    const isActive = b.status!=='cancelled' && new Date(s.date) > new Date();
+    const canCancel = isActive && hoursUntil >= 24;
+    const withinDay = isActive && hoursUntil < 24;
     const tier = cancellationTier(s.date);
     return `<tr>
       <td><strong>${service.name}</strong><br><span class="muted">${room2label(s.roomId)}</span></td>
@@ -708,7 +711,7 @@ function viewMyBookings(user){
       <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
       <td style="font-size:0.78rem;white-space:nowrap;">${fmtDateTimeFull(b.createdAt)}</td>
       <td style="font-size:0.78rem;white-space:nowrap;">${b.cancelledAt ? fmtDateTimeFull(b.cancelledAt) : '—'}</td>
-      <td>${canCancel ? `<button class="btn btn-danger btn-sm" data-cancel-booking="${b.id}" title="${tier.label}">Lemondás</button>` : (b.medicalCert ? '<span class="muted">Igazolás csatolva</span>' : '')}</td>
+      <td>${canCancel ? `<button class="btn btn-danger btn-sm" data-cancel-booking="${b.id}" title="${tier.label}">Lemondás</button>` : withinDay ? '<span class="muted" style="font-size:0.78rem;">24 órán belül már csak a terapeuta / admin mondhatja le</span>' : (b.medicalCert ? '<span class="muted">Igazolás csatolva</span>' : '')}</td>
     </tr>`;
   }).join('');
   return `<div class="card"><h3 class="section-title">Foglalásaim</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szolgáltatás</th><th>Gyermek</th><th>Időpont</th><th>Fizetés</th><th>Státusz</th><th>Jelentkezés ideje</th><th>Lemondás ideje</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
@@ -753,7 +756,7 @@ async function doCancel(user, bookingId){
   }).eq('id', bookingId);
   if(error){ toast('Hiba a lemondáskor: ' + error.message); return; }
   if(b.packageUsed && tier.refundPct===100){
-    const pkg = db.packages.find(p=>p.userId===user.id);
+    const pkg = db.packages.find(p=>p.userId===b.parentId);
     if(pkg) await sb.from('packages').update({ remaining: pkg.remaining + 1 }).eq('id', pkg.id);
   }
   closeModal();
@@ -870,6 +873,7 @@ function viewTherapistPayments(user){
     const parent = userOf(b.parentId); const child = parent ? parent.children.find(c=>c.id===b.childId) : null;
     const statusLabel = {confirmed:'Megerősítve', pending:'Fizetésre vár', cancelled:'Lemondva'}[b.status];
     const canMarkPaid = b.status==='pending';
+    const canStaffCancel = b.status!=='cancelled' && new Date(s.date) > new Date();
     return `<tr>
       <td>${parent?parent.name:'—'}<br><span class="muted">${child?child.name:''}</span></td>
       <td>${service.name}</td>
@@ -878,7 +882,7 @@ function viewTherapistPayments(user){
       <td><span class="status-badge status-${b.status}">${statusLabel}</span></td>
       <td style="font-size:0.78rem;white-space:nowrap;">${fmtDateTimeFull(b.createdAt)}</td>
       <td style="font-size:0.78rem;white-space:nowrap;">${b.cancelledAt ? fmtDateTimeFull(b.cancelledAt) : '—'}</td>
-      <td>${canMarkPaid ? `<button class="btn btn-primary btn-sm" data-mark-paid="${b.id}">Fizetve — visszaigazolás</button>` : ''}</td>
+      <td style="white-space:nowrap;">${canMarkPaid ? `<button class="btn btn-primary btn-sm" data-mark-paid="${b.id}">Fizetve</button>` : ''} ${canStaffCancel ? `<button class="btn btn-danger btn-sm" data-cancel-booking="${b.id}">Lemondás</button>` : ''}</td>
     </tr>`;
   }).join('');
   return `<div class="card"><h3 class="section-title">Saját óráim foglalásai & fizetései</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő / gyermek</th><th>Szolgáltatás</th><th>Időpont</th><th>Fizetés</th><th>Státusz</th><th>Jelentkezés ideje</th><th>Lemondás ideje</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
@@ -925,6 +929,7 @@ function viewAdminBookings(user){
     const parent = userOf(b.parentId); const child = parent ? parent.children.find(c=>c.id===b.childId) : null;
     const statusLabel = {confirmed:'Megerősítve', pending:'Fizetésre vár', cancelled:'Lemondva'}[b.status];
     const canMarkPaid = b.status==='pending';
+    const canStaffCancel = b.status!=='cancelled' && new Date(s.date) > new Date();
     return `<tr>
       <td>${parent?parent.name:'—'}<br><span class="muted">${child?child.name:''}</span></td>
       <td>${service.name}</td>
@@ -933,7 +938,7 @@ function viewAdminBookings(user){
       <td><span class="status-badge status-${b.status}">${statusLabel}</span></td>
       <td style="font-size:0.78rem;white-space:nowrap;">${fmtDateTimeFull(b.createdAt)}</td>
       <td style="font-size:0.78rem;white-space:nowrap;">${b.cancelledAt ? fmtDateTimeFull(b.cancelledAt) : '—'}</td>
-      <td>${canMarkPaid ? `<button class="btn btn-primary btn-sm" data-mark-paid="${b.id}">Fizetve — visszaigazolás</button>` : ''}</td>
+      <td style="white-space:nowrap;">${canMarkPaid ? `<button class="btn btn-primary btn-sm" data-mark-paid="${b.id}">Fizetve</button>` : ''} ${canStaffCancel ? `<button class="btn btn-danger btn-sm" data-cancel-booking="${b.id}">Lemondás</button>` : ''}</td>
     </tr>`;
   }).join('');
   return `<div class="card"><h3 class="section-title">Foglalások & fizetések</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő / gyermek</th><th>Szolgáltatás</th><th>Időpont</th><th>Fizetés</th><th>Státusz</th><th>Jelentkezés ideje</th><th>Lemondás ideje</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
@@ -1038,14 +1043,15 @@ function viewAdminRooms(user){
     <td><span class="dot" style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${r.color};vertical-align:middle;"></span></td>
     <td>${r.needsTherapist?'Igen':'Nem'}</td>
     <td>${fmtHUF(r.rentalFee||0)}</td>
+    <td>${r.capacity>1 ? fmtHUF(r.rentalFeeGroup||0) : '<span class="muted">—</span>'}</td>
     <td style="white-space:nowrap;"><button class="btn btn-ghost btn-sm" data-edit-room="${r.id}">Szerkesztés</button> <button class="btn btn-danger btn-sm" data-delete-room="${r.id}">Törlés</button></td>
-  </tr>`).join('') || '<tr><td colspan="6" class="muted">Nincs felvett helyiség.</td></tr>';
+  </tr>`).join('') || '<tr><td colspan="7" class="muted">Nincs felvett helyiség.</td></tr>';
   return `<div class="card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
       <h3 class="section-title" style="margin:0;">Helyiségek</h3>
       <button class="btn btn-primary btn-sm" data-add-room>+ Új helyiség</button>
     </div>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Név</th><th>Kapacitás</th><th>Szín</th><th>Terapeuta szükséges?</th><th>Bérleti díj / alkalom</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Név</th><th>Kapacitás</th><th>Szín</th><th>Terapeuta szükséges?</th><th>Bérleti díj (egyéni)</th><th>Bérleti díj (csoportos)</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
     <p class="muted" style="margin-top:16px;">Azok a helyiségek, ahol a "Terapeuta szükséges?" Nem, terapeuta fiókból nem választhatók óra kiíráskor (pl. Masszázsfotel) — ezt admin hirdeti meg. A bérleti díj a "Terembérleti díjak" fülön kerül összesítésre.</p>
   </div>`;
 }
@@ -1060,7 +1066,9 @@ function openRoomModal(mode, roomId){
       <div class="field"><label for="roomName">Név</label><input type="text" id="roomName" value="${isEdit?r.name:''}" required></div>
       <div class="field"><label for="roomCapacity">Kapacitás (max fő / alkalom)</label><input type="number" id="roomCapacity" min="1" value="${isEdit?r.capacity:1}" required></div>
       <div class="field"><label for="roomColor">Szín (naptár színkód)</label><input type="color" id="roomColor" value="${isEdit?toHex(r.color):'#1E8F76'}" required></div>
-      <div class="field"><label for="roomRentalFee">Bérleti díj (Ft / alkalom)</label><input type="number" id="roomRentalFee" min="0" step="500" value="${isEdit?(r.rentalFee||0):0}" required></div>
+      <div class="field"><label for="roomRentalFee">Bérleti díj — egyéni alkalom (Ft)</label><input type="number" id="roomRentalFee" min="0" step="500" value="${isEdit?(r.rentalFee||0):0}" required></div>
+      <div class="field"><label for="roomRentalFeeGroup">Bérleti díj — csoportos alkalom (Ft)</label><input type="number" id="roomRentalFeeGroup" min="0" step="500" value="${isEdit?(r.rentalFeeGroup||0):0}"></div>
+      <p class="muted" style="margin-bottom:14px;">A csoportos díj csak azoknál az óráknál számít, amiket több fős (1-nél nagyobb kapacitású) alkalomra írnak ki.</p>
       <div class="checkbox-row"><input type="checkbox" id="roomNeedsTherapist" ${(!isEdit || r.needsTherapist) ? 'checked' : ''}><label for="roomNeedsTherapist">Ehhez a helyiséghez terapeuta tartozik (ha nincs bepipálva, terapeuta fiókból nem lesz kiírható, pl. relaxációs zóna)</label></div>
       <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">${isEdit?'Mentés':'Felvétel'}</button>
     </form>
@@ -1071,8 +1079,9 @@ function openRoomModal(mode, roomId){
     const capacity = parseInt(document.getElementById('roomCapacity').value,10);
     const color = document.getElementById('roomColor').value;
     const rentalFee = parseInt(document.getElementById('roomRentalFee').value,10);
+    const rentalFeeGroup = parseInt(document.getElementById('roomRentalFeeGroup').value,10) || 0;
     const needsTherapist = document.getElementById('roomNeedsTherapist').checked;
-    const payload = { name, capacity, color, needs_therapist: needsTherapist, rental_fee: rentalFee };
+    const payload = { name, capacity, color, needs_therapist: needsTherapist, rental_fee: rentalFee, rental_fee_group: rentalFeeGroup };
     const { error } = isEdit
       ? await sb.from('rooms').update(payload).eq('id', roomId)
       : await sb.from('rooms').insert(payload);
@@ -1174,9 +1183,11 @@ function viewAdminRoomRental(user){
   let total = 0;
   const rows = filtered.map(s=>{
     const room = roomOf(s.roomId); const ther = s.therapistId ? therapistOf(s.therapistId) : null;
-    const fee = room.rentalFee || 0; total += fee;
-    return `<tr><td>${fmtDate(s.date)}</td><td>${room.name}</td><td>${ther?ther.name:'—'}</td><td>${serviceOf(s.serviceTypeId).name}</td><td>${fmtHUF(fee)}</td></tr>`;
-  }).join('') || '<tr><td colspan="5" class="muted">Nincs a szűrésnek megfelelő kiírás.</td></tr>';
+    const isGroup = s.capacity > 1;
+    const fee = isGroup ? (room.rentalFeeGroup || 0) : (room.rentalFee || 0);
+    total += fee;
+    return `<tr><td>${fmtDate(s.date)}</td><td>${room.name}</td><td>${isGroup?'Csoportos':'Egyéni'}</td><td>${ther?ther.name:'—'}</td><td>${serviceOf(s.serviceTypeId).name}</td><td>${fmtHUF(fee)}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="muted">Nincs a szűrésnek megfelelő kiírás.</td></tr>';
 
   return `<div class="card" style="margin-bottom:24px;">
     <h3 class="section-title">Szűrők</h3>
@@ -1191,7 +1202,7 @@ function viewAdminRoomRental(user){
   </div>
   <div class="card">
     <h3 class="section-title">Összesítés a kiírások alapján</h3>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Időpont</th><th>Helyiség</th><th>Terapeuta</th><th>Szolgáltatás</th><th>Bérleti díj</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Időpont</th><th>Helyiség</th><th>Típus</th><th>Terapeuta</th><th>Szolgáltatás</th><th>Bérleti díj</th></tr></thead><tbody>${rows}</tbody></table></div>
     <div class="pay-detail-box" style="margin-top:20px;max-width:320px;margin-left:auto;"><div><span>Összesen</span><span><strong>${fmtHUF(total)}</strong></span></div></div>
   </div>`;
 }
