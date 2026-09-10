@@ -154,7 +154,7 @@ footer.app-footer{text-align:center;padding:30px 0;color:var(--ink-soft);font-si
 </head>
 <body>
 
-<div class="demo-banner">⚠️ Élő adatbázis (Supabase) — az adatok már mindenki böngészőjében megjelennek. Valós bankkártyás fizetés és automatikus email még nincs bekötve, lásd a README-t.</div>
+<div class="demo-banner" id="demoBanner" style="display:none;">⚠️ Élő adatbázis (Supabase) — az adatok már mindenki böngészőjében megjelennek. Valós bankkártyás fizetés és automatikus email még nincs bekötve, lásd a README-t.</div>
 
 <div class="topbar">
   <div class="topbar-inner">
@@ -271,10 +271,10 @@ async function refreshDB(){
   const childrenRows = childrenRes.data || [];
   const therDetails = therRes.data || [];
 
-  db.rooms = (roomsRes.data||[]).map(r=>({ id:r.id, name:r.name, capacity:r.capacity, color:r.color, needsTherapist:r.needs_therapist }));
-  db.serviceTypes = (svcRes.data||[]).map(s=>({ id:s.id, name:s.name, price:s.price, packageEligible:s.package_eligible, adminOnly:s.admin_only }));
+  db.rooms = (roomsRes.data||[]).map(r=>({ id:r.id, name:r.name, capacity:r.capacity, color:r.color, needsTherapist:r.needs_therapist, rentalFee:r.rental_fee||0 }));
+  db.serviceTypes = (svcRes.data||[]).map(s=>({ id:s.id, name:s.name, price:s.price, packageEligible:s.package_eligible, adminOnly:s.admin_only, therapistId:s.therapist_id||null }));
   db.packages = (pkgRes.data||[]).map(p=>({ id:p.id, userId:p.user_id, type:p.type, remaining:p.remaining, purchasedAt:p.purchased_at }));
-  db.bookings = (bookRes.data||[]).map(b=>({ id:b.id, slotId:b.slot_id, parentId:b.parent_id, childId:b.child_id, paymentMethod:b.payment_method, packageUsed:b.package_used, status:b.status, medicalCert:b.medical_cert_url, refund: b.refund_note ? {label:b.refund_note} : null, createdAt:b.created_at }));
+  db.bookings = (bookRes.data||[]).map(b=>({ id:b.id, slotId:b.slot_id, parentId:b.parent_id, childId:b.child_id, paymentMethod:b.payment_method, packageUsed:b.package_used, status:b.status, medicalCert:b.medical_cert_url, refund: b.refund_note ? {label:b.refund_note} : null, createdAt:b.created_at, cancelledAt:b.cancelled_at }));
   const waitlistRows = (waitRes.data||[]).map(w=>({ slotId:w.slot_id, childId:w.child_id, parentId:w.parent_id, addedAt:w.added_at }));
   db.slots = (slotRes.data||[]).map(s=>{
     const bookedChildIds = db.bookings.filter(b=>b.slotId===s.id && b.status!=='cancelled').map(b=>b.childId);
@@ -303,6 +303,13 @@ function currentUser(){
 
 function fmtHUF(n){ return n.toLocaleString('hu-HU') + ' Ft'; }
 function fmtDate(iso){ const d = new Date(iso); return d.toLocaleDateString('hu-HU', {year:'numeric',month:'long',day:'numeric'}) + ' ' + d.toLocaleTimeString('hu-HU',{hour:'2-digit',minute:'2-digit'}); }
+/* Másodperc-pontos időbélyeg (pl. foglalás/lemondás pontos ideje) — ÉÉÉÉ.HH.NN. ÓÓ:PP:MP */
+function fmtDateTimeFull(iso){
+  if(!iso) return '—';
+  const d = new Date(iso);
+  const p = (n)=>String(n).padStart(2,'0');
+  return d.getFullYear()+'.'+p(d.getMonth()+1)+'.'+p(d.getDate())+'. '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
+}
 function roomOf(id){ return db.rooms.find(r=>r.id===id); }
 function serviceOf(id){ return db.serviceTypes.find(s=>s.id===id); }
 function therapistOf(id){ return db.therapists.find(t=>t.id===id); }
@@ -321,6 +328,7 @@ function weekRangeLabel(monday){
   return f(monday) + ' – ' + f(sunday);
 }
 let calWeekStart = startOfWeek(new Date());
+let rentalFilter = { from:'', to:'', therapistId:'', roomId:'' };
 
 /* Egy heti naptárrács renderelése. slots: az adott héten megjelenítendő időpontok.
    opts.actionRenderer(slot, full, isPast) -> HTML string a slot kártya aljára.
@@ -466,7 +474,10 @@ registerForm.addEventListener('submit', async (e)=>{
   const phone = document.getElementById('regPhone').value.trim();
   const pass = document.getElementById('regPass').value;
   const submitBtn = registerForm.querySelector('button[type="submit"]'); submitBtn.disabled = true;
-  const { data, error } = await sb.auth.signUp({ email, password: pass, options: { data: { name, phone } } });
+  const { data, error } = await sb.auth.signUp({
+    email, password: pass,
+    options: { data: { name, phone }, emailRedirectTo: window.location.origin + window.location.pathname },
+  });
   submitBtn.disabled = false;
   if(error){ showAuthError(error.message.includes('registered') ? 'Ez az e-mail cím már regisztrálva van.' : error.message); return; }
   if(data.session){
@@ -489,6 +500,8 @@ function boot(){
   const authScreen = document.getElementById('authScreen');
   const appMain = document.getElementById('appMain');
   const topbarActions = document.getElementById('topbarActions');
+  const demoBanner = document.getElementById('demoBanner');
+  demoBanner.style.display = (user && user.role==='admin') ? 'block' : 'none';
 
   if(!user){ authScreen.style.display='block'; appMain.style.display='none'; return; }
 
@@ -502,7 +515,7 @@ function boot(){
   const tabsByRole = {
     parent: [['book','Naptár & Foglalás'],['mybookings','Foglalásaim'],['children','Gyermekeim'],['packages','Bérletem']],
     therapist: [['calendar','Csapatnaptár'],['announce','Saját órák kiírása'],['payments','Fizetések']],
-    admin: [['calendar','Naptár'],['manage_bookings','Foglalások / fizetések'],['manage_packages','Bérletek'],['manage_certs','Orvosi igazolások'],['manage_therapists','Terapeuták'],['manage_rooms','Helyiségek'],['manage_services','Szolgáltatások & árak']],
+    admin: [['calendar','Naptár'],['manage_bookings','Foglalások / fizetések'],['manage_packages','Bérletek'],['manage_certs','Orvosi igazolások'],['manage_therapists','Terapeuták'],['manage_rooms','Helyiségek'],['manage_services','Szolgáltatások & árak'],['rental','Terembérleti díjak']],
   };
   const tabs = tabsByRole[user.role];
   currentTab = currentTab && tabs.some(t=>t[0]===currentTab) ? currentTab : tabs[0][0];
@@ -536,6 +549,7 @@ function renderView(user, tab){
     if(tab==='manage_therapists') root.innerHTML = viewAdminTherapists(user);
     if(tab==='manage_rooms') root.innerHTML = viewAdminRooms(user);
     if(tab==='manage_services') root.innerHTML = viewAdminServices(user);
+    if(tab==='rental') root.innerHTML = viewAdminRoomRental(user);
   }
   attachViewHandlers(user, tab);
 }
@@ -692,10 +706,12 @@ function viewMyBookings(user){
       <td>${fmtDate(s.date)}</td>
       <td>${b.packageUsed ? 'Bérlet' : payLabel(b.paymentMethod)}</td>
       <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
+      <td style="font-size:0.78rem;white-space:nowrap;">${fmtDateTimeFull(b.createdAt)}</td>
+      <td style="font-size:0.78rem;white-space:nowrap;">${b.cancelledAt ? fmtDateTimeFull(b.cancelledAt) : '—'}</td>
       <td>${canCancel ? `<button class="btn btn-danger btn-sm" data-cancel-booking="${b.id}" title="${tier.label}">Lemondás</button>` : (b.medicalCert ? '<span class="muted">Igazolás csatolva</span>' : '')}</td>
     </tr>`;
   }).join('');
-  return `<div class="card"><h3 class="section-title">Foglalásaim</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szolgáltatás</th><th>Gyermek</th><th>Időpont</th><th>Fizetés</th><th>Státusz</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  return `<div class="card"><h3 class="section-title">Foglalásaim</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szolgáltatás</th><th>Gyermek</th><th>Időpont</th><th>Fizetés</th><th>Státusz</th><th>Jelentkezés ideje</th><th>Lemondás ideje</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 function room2label(id){ return roomOf(id).name; }
 function payLabel(m){ return {gateway:'Online kapu', revolut:'Revolut', bank:'Banki átutalás', cash:'Készpénz helyszínen'}[m] || m; }
@@ -733,6 +749,7 @@ async function doCancel(user, bookingId){
     status: 'cancelled',
     medical_cert_url: hasCert ? 'jelölve (fájlfeltöltés a következő lépésben lesz bekötve)' : null,
     refund_note: tier.label,
+    cancelled_at: new Date().toISOString(),
   }).eq('id', bookingId);
   if(error){ toast('Hiba a lemondáskor: ' + error.message); return; }
   if(b.packageUsed && tier.refundPct===100){
@@ -786,8 +803,14 @@ function viewTherapistAnnounce(user){
     showTherapist:false,
     actionRenderer: (s) => `<button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
   });
+  const ownServices = db.serviceTypes.filter(s=>s.therapistId===user.id);
   const roomOpts = db.rooms.filter(r=>r.needsTherapist).map(r=>`<option value="${r.id}">${r.name} (max ${r.capacity} fő)</option>`).join('');
-  const serviceOpts = db.serviceTypes.filter(s=>!s.adminOnly).map(s=>`<option value="${s.id}">${s.name} — ${fmtHUF(s.price)}</option>`).join('');
+  const serviceOpts = ownServices.map(s=>`<option value="${s.id}">${s.name} — ${fmtHUF(s.price)}</option>`).join('')
+    || '<option value="" disabled selected>Előbb vegyél fel egy saját foglalkozást lent</option>';
+  const ownServiceRows = ownServices.map(s=>`<div class="slot-item" style="margin-bottom:10px;">
+      <div class="slot-info"><h4>${s.name}</h4><div class="slot-meta"><span>💳 ${fmtHUF(s.price)}</span><span>${s.packageEligible?'Bérlettel is':'Csak alkalmanként'}</span></div></div>
+      <button class="btn btn-ghost btn-sm" data-edit-own-service="${s.id}">Szerkesztés</button>
+    </div>`).join('') || '<p class="muted">Még nincs saját foglalkozás típusod — vedd fel az alábbi űrlappal.</p>';
   return `<div class="grid-2" style="margin-bottom:24px;">
     <div class="card"><h3 class="section-title">Új óra kiírása</h3>
       <form id="addSlotForm" data-mode="therapist">
@@ -796,11 +819,13 @@ function viewTherapistAnnounce(user){
         <div class="field"><label for="slotRoom">Helyszín</label><select id="slotRoom" required>${roomOpts}</select></div>
         <div class="field"><label for="slotService">Foglalkozás típusa</label><select id="slotService" required>${serviceOpts}</select></div>
         <p class="muted" style="margin-bottom:14px;">A Masszázsfotel és a Masszázs szolgáltatás nem választható terapeuta fiókból — azokat az admin hirdeti meg.</p>
-        <button type="submit" class="btn btn-primary btn-block">Meghirdetés</button>
+        <button type="submit" class="btn btn-primary btn-block" ${ownServices.length===0?'disabled':''}>Meghirdetés</button>
       </form>
     </div>
-    <div class="card"><h3 class="section-title">Új foglalkozás típus felvétele</h3>
-      <p class="muted" style="margin-bottom:14px;">Ha olyan foglalkozást tartasz, ami még nincs a listában, itt felveheted a nevét és az árát — utána azonnal választható lesz a bal oldali űrlapon.</p>
+    <div class="card"><h3 class="section-title">Saját foglalkozásaim</h3>
+      ${ownServiceRows}
+      <hr style="border:none;border-top:1px solid var(--line);margin:18px 0;">
+      <h4 style="font-size:0.95rem;margin-bottom:10px;">Új foglalkozás típus felvétele</h4>
       <form id="addServiceTherapistForm">
         <div class="field"><label for="tSvcName">Foglalkozás neve</label><input type="text" id="tSvcName" required></div>
         <div class="field"><label for="tSvcPrice">Ár (Ft)</label><input type="number" id="tSvcPrice" min="0" step="500" value="6000" required></div>
@@ -810,6 +835,30 @@ function viewTherapistAnnounce(user){
     </div>
   </div>
     <div class="card"><h3 class="section-title">Saját meghirdetett óráim</h3>${calendar}</div>`;
+}
+
+function openOwnServiceModal(user, serviceId){
+  const s = db.serviceTypes.find(x=>x.id===serviceId);
+  openModal(`
+    <button class="modal-close" data-close>&times;</button>
+    <h3>Foglalkozás szerkesztése</h3>
+    <form id="ownServiceForm" style="margin-top:16px;">
+      <div class="field"><label for="oSvcName">Foglalkozás neve</label><input type="text" id="oSvcName" value="${s.name}" required></div>
+      <div class="field"><label for="oSvcPrice">Ár (Ft)</label><input type="number" id="oSvcPrice" min="0" step="500" value="${s.price}" required></div>
+      <div class="checkbox-row"><input type="checkbox" id="oSvcPackageEligible" ${s.packageEligible?'checked':''}><label for="oSvcPackageEligible">Igénybe vehető bérlettel (4-es / 8-as)</label></div>
+      <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">Mentés</button>
+    </form>
+  `);
+  document.getElementById('ownServiceForm').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const { error } = await sb.from('service_types').update({
+      name: document.getElementById('oSvcName').value.trim(),
+      price: parseInt(document.getElementById('oSvcPrice').value,10),
+      package_eligible: document.getElementById('oSvcPackageEligible').checked,
+    }).eq('id', serviceId);
+    if(error){ toast('Hiba: ' + error.message); return; }
+    closeModal(); toast('Foglalkozás frissítve.'); await refreshDB(); boot();
+  });
 }
 
 function viewTherapistPayments(user){
@@ -827,10 +876,12 @@ function viewTherapistPayments(user){
       <td>${fmtDate(s.date)}</td>
       <td>${b.packageUsed ? 'Bérlet' : payLabel(b.paymentMethod)}</td>
       <td><span class="status-badge status-${b.status}">${statusLabel}</span></td>
+      <td style="font-size:0.78rem;white-space:nowrap;">${fmtDateTimeFull(b.createdAt)}</td>
+      <td style="font-size:0.78rem;white-space:nowrap;">${b.cancelledAt ? fmtDateTimeFull(b.cancelledAt) : '—'}</td>
       <td>${canMarkPaid ? `<button class="btn btn-primary btn-sm" data-mark-paid="${b.id}">Fizetve — visszaigazolás</button>` : ''}</td>
     </tr>`;
   }).join('');
-  return `<div class="card"><h3 class="section-title">Saját óráim foglalásai & fizetései</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő / gyermek</th><th>Szolgáltatás</th><th>Időpont</th><th>Fizetés</th><th>Státusz</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  return `<div class="card"><h3 class="section-title">Saját óráim foglalásai & fizetései</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő / gyermek</th><th>Szolgáltatás</th><th>Időpont</th><th>Fizetés</th><th>Státusz</th><th>Jelentkezés ideje</th><th>Lemondás ideje</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
 /* =========================================================
@@ -839,7 +890,10 @@ function viewTherapistPayments(user){
 function viewAdminCalendar(user){
   const roomOpts = db.rooms.map(r=>`<option value="${r.id}">${r.name} (max ${r.capacity} fő)</option>`).join('');
   const therOpts = '<option value="">— nincs (pl. Masszázsfotel) —</option>' + db.therapists.map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
-  const serviceOpts = db.serviceTypes.map(s=>`<option value="${s.id}">${s.name} — ${fmtHUF(s.price)}</option>`).join('');
+  const serviceOpts = db.serviceTypes.map(s=>{
+    const ther = s.therapistId ? therapistOf(s.therapistId) : null;
+    return `<option value="${s.id}">${s.name}${ther ? ' ('+ther.name+')' : ' (központi)'} — ${fmtHUF(s.price)}</option>`;
+  }).join('');
   const calendar = renderWeekCalendar(db.slots, {
     actionRenderer: (s) => `<button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
   });
@@ -877,10 +931,12 @@ function viewAdminBookings(user){
       <td>${fmtDate(s.date)}</td>
       <td>${b.packageUsed ? 'Bérlet' : payLabel(b.paymentMethod)}</td>
       <td><span class="status-badge status-${b.status}">${statusLabel}</span></td>
+      <td style="font-size:0.78rem;white-space:nowrap;">${fmtDateTimeFull(b.createdAt)}</td>
+      <td style="font-size:0.78rem;white-space:nowrap;">${b.cancelledAt ? fmtDateTimeFull(b.cancelledAt) : '—'}</td>
       <td>${canMarkPaid ? `<button class="btn btn-primary btn-sm" data-mark-paid="${b.id}">Fizetve — visszaigazolás</button>` : ''}</td>
     </tr>`;
   }).join('');
-  return `<div class="card"><h3 class="section-title">Foglalások & fizetések</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő / gyermek</th><th>Szolgáltatás</th><th>Időpont</th><th>Fizetés</th><th>Státusz</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  return `<div class="card"><h3 class="section-title">Foglalások & fizetések</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő / gyermek</th><th>Szolgáltatás</th><th>Időpont</th><th>Fizetés</th><th>Státusz</th><th>Jelentkezés ideje</th><th>Lemondás ideje</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
 /* =========================================================
@@ -981,15 +1037,16 @@ function viewAdminRooms(user){
     <td>${r.name}</td><td>${r.capacity} fő</td>
     <td><span class="dot" style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${r.color};vertical-align:middle;"></span></td>
     <td>${r.needsTherapist?'Igen':'Nem'}</td>
+    <td>${fmtHUF(r.rentalFee||0)}</td>
     <td style="white-space:nowrap;"><button class="btn btn-ghost btn-sm" data-edit-room="${r.id}">Szerkesztés</button> <button class="btn btn-danger btn-sm" data-delete-room="${r.id}">Törlés</button></td>
-  </tr>`).join('') || '<tr><td colspan="5" class="muted">Nincs felvett helyiség.</td></tr>';
+  </tr>`).join('') || '<tr><td colspan="6" class="muted">Nincs felvett helyiség.</td></tr>';
   return `<div class="card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
       <h3 class="section-title" style="margin:0;">Helyiségek</h3>
       <button class="btn btn-primary btn-sm" data-add-room>+ Új helyiség</button>
     </div>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Név</th><th>Kapacitás</th><th>Szín</th><th>Terapeuta szükséges?</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-    <p class="muted" style="margin-top:16px;">Azok a helyiségek, ahol a "Terapeuta szükséges?" Nem, terapeuta fiókból nem választhatók óra kiíráskor (pl. Masszázsfotel) — ezt admin hirdeti meg.</p>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Név</th><th>Kapacitás</th><th>Szín</th><th>Terapeuta szükséges?</th><th>Bérleti díj / alkalom</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="muted" style="margin-top:16px;">Azok a helyiségek, ahol a "Terapeuta szükséges?" Nem, terapeuta fiókból nem választhatók óra kiíráskor (pl. Masszázsfotel) — ezt admin hirdeti meg. A bérleti díj a "Terembérleti díjak" fülön kerül összesítésre.</p>
   </div>`;
 }
 
@@ -1003,6 +1060,7 @@ function openRoomModal(mode, roomId){
       <div class="field"><label for="roomName">Név</label><input type="text" id="roomName" value="${isEdit?r.name:''}" required></div>
       <div class="field"><label for="roomCapacity">Kapacitás (max fő / alkalom)</label><input type="number" id="roomCapacity" min="1" value="${isEdit?r.capacity:1}" required></div>
       <div class="field"><label for="roomColor">Szín (naptár színkód)</label><input type="color" id="roomColor" value="${isEdit?toHex(r.color):'#1E8F76'}" required></div>
+      <div class="field"><label for="roomRentalFee">Bérleti díj (Ft / alkalom)</label><input type="number" id="roomRentalFee" min="0" step="500" value="${isEdit?(r.rentalFee||0):0}" required></div>
       <div class="checkbox-row"><input type="checkbox" id="roomNeedsTherapist" ${(!isEdit || r.needsTherapist) ? 'checked' : ''}><label for="roomNeedsTherapist">Ehhez a helyiséghez terapeuta tartozik (ha nincs bepipálva, terapeuta fiókból nem lesz kiírható, pl. relaxációs zóna)</label></div>
       <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">${isEdit?'Mentés':'Felvétel'}</button>
     </form>
@@ -1012,8 +1070,9 @@ function openRoomModal(mode, roomId){
     const name = document.getElementById('roomName').value.trim();
     const capacity = parseInt(document.getElementById('roomCapacity').value,10);
     const color = document.getElementById('roomColor').value;
+    const rentalFee = parseInt(document.getElementById('roomRentalFee').value,10);
     const needsTherapist = document.getElementById('roomNeedsTherapist').checked;
-    const payload = { name, capacity, color, needs_therapist: needsTherapist };
+    const payload = { name, capacity, color, needs_therapist: needsTherapist, rental_fee: rentalFee };
     const { error } = isEdit
       ? await sb.from('rooms').update(payload).eq('id', roomId)
       : await sb.from('rooms').insert(payload);
@@ -1040,27 +1099,33 @@ async function deleteRoom(roomId){
    ADMIN: SZOLGÁLTATÁSOK & ÁRAK (CRUD)
    ========================================================= */
 function viewAdminServices(user){
-  const rows = db.serviceTypes.map(s=>`<tr>
-    <td>${s.name}</td><td>${fmtHUF(s.price)}</td><td>${s.packageEligible?'Igen':'Nem'}</td><td>${s.adminOnly?'Igen':'Nem'}</td>
+  const rows = db.serviceTypes.map(s=>{
+    const ther = s.therapistId ? therapistOf(s.therapistId) : null;
+    return `<tr>
+    <td>${s.name}</td><td>${ther ? ther.name : '<span class="muted">— központi —</span>'}</td><td>${fmtHUF(s.price)}</td><td>${s.packageEligible?'Igen':'Nem'}</td><td>${s.adminOnly?'Igen':'Nem'}</td>
     <td style="white-space:nowrap;"><button class="btn btn-ghost btn-sm" data-edit-service="${s.id}">Szerkesztés</button> <button class="btn btn-danger btn-sm" data-delete-service="${s.id}">Törlés</button></td>
-  </tr>`).join('') || '<tr><td colspan="5" class="muted">Nincs felvett szolgáltatás.</td></tr>';
+  </tr>`;
+  }).join('') || '<tr><td colspan="6" class="muted">Nincs felvett szolgáltatás.</td></tr>';
   return `<div class="card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
       <h3 class="section-title" style="margin:0;">Szolgáltatások & árak</h3>
       <button class="btn btn-primary btn-sm" data-add-service>+ Új szolgáltatás</button>
     </div>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Szolgáltatás</th><th>Ár</th><th>Bérlettel igénybe vehető</th><th>Csak admin hirdetheti</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Szolgáltatás</th><th>Terapeuta</th><th>Ár</th><th>Bérlettel igénybe vehető</th><th>Csak admin hirdetheti</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="muted" style="margin-top:16px;">Egy terapeutát csak akkor tudsz kiválasztani egy szolgáltatáshoz, ha már felvetted a "Terapeuták" fülön.</p>
   </div>`;
 }
 
 function openServiceModal(mode, serviceId){
   const isEdit = mode==='edit';
   const s = isEdit ? db.serviceTypes.find(x=>x.id===serviceId) : null;
+  const therOpts = '<option value="">— nincs (központi szolgáltatás) —</option>' + db.therapists.map(t=>`<option value="${t.id}" ${isEdit && s.therapistId===t.id ? 'selected' : ''}>${t.name}</option>`).join('');
   openModal(`
     <button class="modal-close" data-close>&times;</button>
     <h3>${isEdit?'Szolgáltatás szerkesztése':'Új szolgáltatás felvétele'}</h3>
     <form id="serviceForm" style="margin-top:16px;">
       <div class="field"><label for="svcName">Megnevezés</label><input type="text" id="svcName" value="${isEdit?s.name:''}" required></div>
+      <div class="field"><label for="svcTherapist">Terapeuta</label><select id="svcTherapist">${therOpts}</select></div>
       <div class="field"><label for="svcPrice">Ár (Ft)</label><input type="number" id="svcPrice" min="0" step="500" value="${isEdit?s.price:5000}" required></div>
       <div class="checkbox-row"><input type="checkbox" id="svcPackageEligible" ${(!isEdit || s.packageEligible) ? 'checked' : ''}><label for="svcPackageEligible">Igénybe vehető bérlettel (4-es / 8-as)</label></div>
       <div class="checkbox-row"><input type="checkbox" id="svcAdminOnly" ${(isEdit && s.adminOnly) ? 'checked' : ''}><label for="svcAdminOnly">Csak admin hirdetheti meg (terapeuta fiókból nem választható, pl. Masszázs)</label></div>
@@ -1073,7 +1138,8 @@ function openServiceModal(mode, serviceId){
     const price = parseInt(document.getElementById('svcPrice').value,10);
     const packageEligible = document.getElementById('svcPackageEligible').checked;
     const adminOnly = document.getElementById('svcAdminOnly').checked;
-    const payload = { name, price, package_eligible: packageEligible, admin_only: adminOnly };
+    const therapistId = document.getElementById('svcTherapist').value || null;
+    const payload = { name, price, package_eligible: packageEligible, admin_only: adminOnly, therapist_id: therapistId };
     const { error } = isEdit
       ? await sb.from('service_types').update(payload).eq('id', serviceId)
       : await sb.from('service_types').insert(payload);
@@ -1089,6 +1155,45 @@ async function deleteService(serviceId){
   const { error } = await sb.from('service_types').delete().eq('id', serviceId);
   if(error){ toast('Hiba a törléskor: ' + error.message); return; }
   toast('Szolgáltatás törölve.'); await refreshDB(); boot();
+}
+
+/* =========================================================
+   ADMIN: TEREMBÉRLETI DÍJAK ÖSSZESÍTŐJE
+   ========================================================= */
+function viewAdminRoomRental(user){
+  const therOpts = '<option value="">Mind</option>' + db.therapists.map(t=>`<option value="${t.id}" ${rentalFilter.therapistId===t.id?'selected':''}>${t.name}</option>`).join('');
+  const roomOpts = '<option value="">Mind</option>' + db.rooms.map(r=>`<option value="${r.id}" ${rentalFilter.roomId===r.id?'selected':''}>${r.name}</option>`).join('');
+
+  let filtered = db.slots.slice();
+  if(rentalFilter.from){ const from = new Date(rentalFilter.from); filtered = filtered.filter(s=>new Date(s.date) >= from); }
+  if(rentalFilter.to){ const to = new Date(rentalFilter.to); to.setHours(23,59,59,999); filtered = filtered.filter(s=>new Date(s.date) <= to); }
+  if(rentalFilter.therapistId){ filtered = filtered.filter(s=>s.therapistId===rentalFilter.therapistId); }
+  if(rentalFilter.roomId){ filtered = filtered.filter(s=>s.roomId===rentalFilter.roomId); }
+  filtered.sort((a,b)=>new Date(a.date)-new Date(b.date));
+
+  let total = 0;
+  const rows = filtered.map(s=>{
+    const room = roomOf(s.roomId); const ther = s.therapistId ? therapistOf(s.therapistId) : null;
+    const fee = room.rentalFee || 0; total += fee;
+    return `<tr><td>${fmtDate(s.date)}</td><td>${room.name}</td><td>${ther?ther.name:'—'}</td><td>${serviceOf(s.serviceTypeId).name}</td><td>${fmtHUF(fee)}</td></tr>`;
+  }).join('') || '<tr><td colspan="5" class="muted">Nincs a szűrésnek megfelelő kiírás.</td></tr>';
+
+  return `<div class="card" style="margin-bottom:24px;">
+    <h3 class="section-title">Szűrők</h3>
+    <div class="form-row">
+      <div class="field"><label for="rentalFrom">Időszak — ettől</label><input type="date" id="rentalFrom" value="${rentalFilter.from}"></div>
+      <div class="field"><label for="rentalTo">Időszak — eddig</label><input type="date" id="rentalTo" value="${rentalFilter.to}"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label for="rentalTherapist">Terapeuta</label><select id="rentalTherapist">${therOpts}</select></div>
+      <div class="field"><label for="rentalRoom">Helyiség</label><select id="rentalRoom">${roomOpts}</select></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3 class="section-title">Összesítés a kiírások alapján</h3>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Időpont</th><th>Helyiség</th><th>Terapeuta</th><th>Szolgáltatás</th><th>Bérleti díj</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="pay-detail-box" style="margin-top:20px;max-width:320px;margin-left:auto;"><div><span>Összesen</span><span><strong>${fmtHUF(total)}</strong></span></div></div>
+  </div>`;
 }
 
 /* =========================================================
@@ -1148,10 +1253,24 @@ function attachViewHandlers(user, tab){
       price: parseInt(document.getElementById('tSvcPrice').value,10),
       package_eligible: document.getElementById('tSvcPackageEligible').checked,
       admin_only: false,
+      therapist_id: user.id,
     });
     if(error){ toast('Hiba: ' + error.message); return; }
     toast('Foglalkozás típus felvéve — most már választható az óra kiírásánál.'); await refreshDB(); boot();
   });
+
+  root.querySelectorAll('[data-edit-own-service]').forEach(btn=>{
+    btn.addEventListener('click', ()=> openOwnServiceModal(user, btn.dataset.editOwnService));
+  });
+
+  // terembérleti díj szűrők
+  const rentalFrom = document.getElementById('rentalFrom');
+  if(rentalFrom){
+    rentalFrom.addEventListener('change', ()=>{ rentalFilter.from = rentalFrom.value; boot(); });
+    document.getElementById('rentalTo').addEventListener('change', (e)=>{ rentalFilter.to = e.target.value; boot(); });
+    document.getElementById('rentalTherapist').addEventListener('change', (e)=>{ rentalFilter.therapistId = e.target.value; boot(); });
+    document.getElementById('rentalRoom').addEventListener('change', (e)=>{ rentalFilter.roomId = e.target.value; boot(); });
+  }
 
   const addSlotForm = document.getElementById('addSlotForm');
   if(addSlotForm) addSlotForm.addEventListener('submit', async (e)=>{
