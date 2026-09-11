@@ -209,6 +209,7 @@ footer.app-footer{text-align:center;padding:30px 0;color:var(--ink-soft);font-si
       <div class="field"><label for="regBillingAddress">Számlázási cím</label><input type="text" id="regBillingAddress" required placeholder="Irányítószám, város, utca, házszám"></div>
       <div class="field"><label for="regTaxNumber">Adószám (ha van)</label><input type="text" id="regTaxNumber" placeholder="Magánszemélyként üresen hagyható"></div>
       <button type="submit" class="btn btn-primary btn-block">Fiók létrehozása</button>
+      <p class="muted" style="margin-top:12px;font-size:0.78rem;text-align:center;">A regisztrációval elfogadod <a href="index.html#adatvedelem" onclick="window.open('adatvedelem.html','_blank');return false;" style="color:var(--teal);">adatkezelési tájékoztatónkat</a>.</p>
     </form>
 
     <div class="demo-accounts">
@@ -525,7 +526,7 @@ function boot(){
   const tabsByRole = {
     parent: [['book','Naptár & Foglalás'],['mybookings','Foglalásaim'],['children','Gyermekeim'],['packages','Bérletem']],
     therapist: [['calendar','Csapatnaptár'],['announce','Saját órák kiírása'],['payments','Fizetések']],
-    admin: [['calendar','Naptár'],['manage_bookings','Foglalások / fizetések'],['manage_packages','Bérletek'],['manage_certs','Orvosi igazolások'],['manage_therapists','Terapeuták'],['manage_rooms','Helyiségek'],['manage_services','Szolgáltatások & árak'],['rental','Terembérleti díjak']],
+    admin: [['calendar','Naptár'],['manage_bookings','Foglalások / fizetések'],['manage_packages','Bérletek'],['manage_therapists','Terapeuták'],['manage_rooms','Helyiségek'],['manage_services','Szolgáltatások & árak'],['rental','Terembérleti díjak']],
   };
   const tabs = tabsByRole[user.role];
   currentTab = currentTab && tabs.some(t=>t[0]===currentTab) ? currentTab : tabs[0][0];
@@ -555,7 +556,6 @@ function renderView(user, tab){
     if(tab==='calendar') root.innerHTML = viewAdminCalendar(user);
     if(tab==='manage_bookings') root.innerHTML = viewAdminBookings(user);
     if(tab==='manage_packages') root.innerHTML = viewAdminPackages(user);
-    if(tab==='manage_certs') root.innerHTML = viewAdminCerts(user);
     if(tab==='manage_therapists') root.innerHTML = viewAdminTherapists(user);
     if(tab==='manage_rooms') root.innerHTML = viewAdminRooms(user);
     if(tab==='manage_services') root.innerHTML = viewAdminServices(user);
@@ -721,7 +721,7 @@ function offerIcsDownload(booking, slot){
 }
 
 /* =========================================================
-   SZÜLŐ: FOGLALÁSAIM (lemondás + orvosi igazolás)
+   SZÜLŐ: FOGLALÁSAIM (lemondás)
    ========================================================= */
 /* Első alkalom szabály: egy gyermek csak akkor foglalhat "rendes" (nem felmérés)
    szolgáltatásra, ha már van korábbi, nem lemondott foglalása egy "is_assessment"
@@ -763,7 +763,7 @@ function viewMyBookings(user){
       <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
       <td style="font-size:0.78rem;white-space:nowrap;">${fmtDateTimeFull(b.createdAt)}</td>
       <td style="font-size:0.78rem;white-space:nowrap;">${b.cancelledAt ? fmtDateTimeFull(b.cancelledAt) : '—'}</td>
-      <td>${canCancel ? `<button class="btn btn-danger btn-sm" data-cancel-booking="${b.id}" title="${tier.label}">Lemondás</button>` : withinDay ? '<span class="muted" style="font-size:0.78rem;">24 órán belül már csak a terapeuta / admin mondhatja le</span>' : (b.medicalCert ? '<span class="muted">Igazolás csatolva</span>' : '')}</td>
+      <td>${canCancel ? `<button class="btn btn-danger btn-sm" data-cancel-booking="${b.id}" title="${tier.label}">Lemondás</button>` : withinDay ? '<span class="muted" style="font-size:0.78rem;">24 órán belül már csak a terapeuta / admin mondhatja le</span>' : ''}</td>
     </tr>`;
   }).join('');
   return `<div class="card"><h3 class="section-title">Foglalásaim</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szolgáltatás</th><th>Gyermek</th><th>Időpont</th><th>Fizetés</th><th>Státusz</th><th>Jelentkezés ideje</th><th>Lemondás ideje</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
@@ -780,29 +780,16 @@ function openCancelModal(user, bookingId){
     <h3>Foglalás lemondása</h3>
     <p class="muted" style="margin-top:8px;">${fmtDate(s.date)} — ${serviceOf(s.serviceTypeId).name}</p>
     <div class="pay-detail-box" style="margin-top:14px;"><div><span>Lemondási szabályzat</span><span><strong>${tier.label}</strong></span></div></div>
-    <div class="checkbox-row">
-      <input type="checkbox" id="medCertCheck">
-      <label for="medCertCheck">Orvosi igazolást csatolok — ebben az esetben 24 órán belül is teljes visszatérítést / bérlet-visszaírást kapok.</label>
-    </div>
-    <div class="field" id="certUploadField" style="display:none;margin-top:10px;">
-      <label for="certFile">Igazolás feltöltése (kép vagy PDF)</label>
-      <input type="file" id="certFile" accept="image/*,application/pdf">
-    </div>
     <button class="btn btn-danger btn-block" style="margin-top:16px;" id="doCancelBtn" data-booking="${b.id}">Lemondás véglegesítése</button>
   `);
-  document.getElementById('medCertCheck').addEventListener('change', (e)=>{
-    document.getElementById('certUploadField').style.display = e.target.checked ? 'block' : 'none';
-  });
 }
 
 async function doCancel(user, bookingId){
   const b = db.bookings.find(x=>x.id===bookingId);
   const s = db.slots.find(x=>x.id===b.slotId);
-  const hasCert = document.getElementById('medCertCheck').checked;
-  const tier = hasCert ? {label:'Orvosi igazolással — 100% visszatérítés', refundPct:100} : cancellationTier(s.date);
+  const tier = cancellationTier(s.date);
   const { error } = await sb.from('bookings').update({
     status: 'cancelled',
-    medical_cert_url: hasCert ? 'jelölve (fájlfeltöltés a következő lépésben lesz bekötve)' : null,
     refund_note: tier.label,
     cancelled_at: new Date().toISOString(),
   }).eq('id', bookingId);
@@ -1038,15 +1025,7 @@ function viewAdminPackages(user){
 /* =========================================================
    ADMIN: ORVOSI IGAZOLÁSOK
    ========================================================= */
-function viewAdminCerts(user){
-  const withCerts = db.bookings.filter(b=>b.medicalCert);
-  const rows = withCerts.map(b=>{
-    const s = db.slots.find(x=>x.id===b.slotId); const parent = userOf(b.parentId);
-    return `<tr><td>${parent?parent.name:'—'}</td><td>${serviceOf(s.serviceTypeId).name}</td><td>${fmtDate(s.date)}</td><td>${b.medicalCert}</td></tr>`;
-  }).join('') || '<tr><td colspan="4" class="muted">Nincs beküldött orvosi igazolás.</td></tr>';
-  return `<div class="card"><h3 class="section-title">Beküldött orvosi igazolások</h3><table><thead><tr><th>Szülő</th><th>Szolgáltatás</th><th>Időpont</th><th>Állapot</th></tr></thead><tbody>${rows}</tbody></table>
-  <p class="muted" style="margin-top:16px;">Demó módban az igazolás fájlja nem kerül valós tárhelyre — élesítéskor ezt biztonságos, jogosultságkezelt storage-ba kell menteni (lásd útmutató).</p></div>`;
-}
+
 
 /* =========================================================
    ADMIN: TERAPEUTÁK (CRUD)
