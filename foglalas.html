@@ -525,7 +525,7 @@ function boot(){
 
   const tabsByRole = {
     parent: [['book','Naptár & Foglalás'],['mybookings','Foglalásaim'],['children','Gyermekeim'],['packages','Bérletem']],
-    therapist: [['calendar','Csapatnaptár'],['announce','Saját órák kiírása'],['payments','Fizetések']],
+    therapist: [['calendar','Csapatnaptár'],['announce','Saját órák kiírása'],['payments','Fizetések'],['packages','Bérletek']],
     admin: [['calendar','Naptár'],['manage_bookings','Foglalások / fizetések'],['manage_packages','Bérletek'],['manage_therapists','Terapeuták'],['manage_rooms','Helyiségek'],['manage_services','Szolgáltatások & árak'],['rental','Terembérleti díjak']],
   };
   const tabs = tabsByRole[user.role];
@@ -551,6 +551,7 @@ function renderView(user, tab){
     if(tab==='calendar') root.innerHTML = viewTherapistTeamCalendar(user);
     if(tab==='announce') root.innerHTML = viewTherapistAnnounce(user);
     if(tab==='payments') root.innerHTML = viewTherapistPayments(user);
+    if(tab==='packages') root.innerHTML = viewAdminPackages(user);
   }
   if(user.role==='admin'){
     if(tab==='calendar') root.innerHTML = viewAdminCalendar(user);
@@ -736,8 +737,7 @@ function childHasAssessment(childId){
 
 function cancellationTier(slotDate){
   const hours = (new Date(slotDate) - new Date())/36e5;
-  if(hours > 48) return {label:'100% visszatérítés', refundPct:100};
-  if(hours > 24) return {label:'50% kötbér (50% visszatérítés)', refundPct:50};
+  if(hours >= 24) return {label:'Nincs kötbér (100% visszatérítés)', refundPct:100};
   return {label:'100% kötbér (nincs visszatérítés)', refundPct:0};
 }
 
@@ -1002,7 +1002,7 @@ function viewAdminBookings(user){
 }
 
 /* =========================================================
-   ADMIN: BÉRLETEK
+   BÉRLETEK (admin és terapeuta egyaránt használja)
    ========================================================= */
 function viewAdminPackages(user){
   const parents = db.users.filter(u=>u.role==='parent');
