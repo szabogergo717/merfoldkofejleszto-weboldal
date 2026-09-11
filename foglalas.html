@@ -289,7 +289,7 @@ async function refreshDB(){
   });
   db.therapists = profiles.filter(p=>p.role==='therapist').map(p=>{
     const det = therDetails.find(d=>d.id===p.id) || {};
-    return { id:p.id, name:p.name, revolut:det.revolut||'', bank:det.bank_account||'', invoicingConnected:det.invoicing_connected||false };
+    return { id:p.id, name:p.name, bank:det.bank_account||'', invoicingConnected:det.invoicing_connected||false };
   });
   db.users = profiles.map(p=>({
     id:p.id, role:p.role, name:p.name, phone:p.phone||'',
@@ -607,8 +607,7 @@ function openBookingModal(user, slotId){
     return;
   }
   const childOptions = eligibleChildren.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
-  const bankInfo = ther ? ther.bank : (db.therapists[0] ? db.therapists[0].bank : '—');
-  const revolutInfo = ther ? ther.revolut : (db.therapists[0] ? db.therapists[0].revolut : '—');
+  const bankInfo = (ther ? ther.bank : (db.therapists[0] ? db.therapists[0].bank : '')) || 'Egyeztetés a terapeutával';
   openModal(`
     <button class="modal-close" data-close>&times;</button>
     <h3>${service.name}</h3>
@@ -625,7 +624,6 @@ function openBookingModal(user, slotId){
       <div class="pay-options">
         ${activePkg ? `<label class="pay-option"><input type="radio" name="payMethod" value="package" checked><strong>Bérlet felhasználása</strong><span>${activePkg.remaining} alkalom maradt a ${activePkg.type}-es bérletből</span></label>` : ''}
         <label class="pay-option"><input type="radio" name="payMethod" value="gateway" ${!activePkg?'checked':''}><strong>Online fizetési kapu <span class="badge-inline">Hamarosan</span></strong><span>Bankkártyás fizetés (Barion/Stripe — integráció folyamatban)</span></label>
-        <label class="pay-option"><input type="radio" name="payMethod" value="revolut"><strong>Revolut</strong><span>${revolutInfo}</span></label>
         <label class="pay-option"><input type="radio" name="payMethod" value="bank"><strong>Banki átutalás</strong><span>${bankInfo}</span></label>
         <label class="pay-option"><input type="radio" name="payMethod" value="cash"><strong>Készpénz a helyszínen</strong><span>Fizetés az alkalom napján, azonnal megerősített foglalás</span></label>
       </div>
@@ -636,7 +634,7 @@ function openBookingModal(user, slotId){
     </div>
     <div class="pay-detail-box" style="margin-top:14px;"><div><span>Fizetendő</span><span><strong>${fmtHUF(service.price)}</strong></span></div></div>
     <button class="btn btn-primary btn-block" style="margin-top:16px;" id="confirmBooking" data-slot="${s.id}">Foglalás megerősítése</button>
-    <p class="muted" style="margin-top:10px;font-size:0.78rem;">Banki átutalás / Revolut választása esetén a foglalás "fizetésre vár" státusszal jön létre, a terapeuta vagy az admin igazolja vissza a beérkezett fizetést. Készpénzes fizetésnél a foglalás azonnal megerősítésre kerül.</p>
+    <p class="muted" style="margin-top:10px;font-size:0.78rem;">Banki átutalás választása esetén a foglalás "fizetésre vár" státusszal jön létre, a terapeuta vagy az admin igazolja vissza a beérkezett fizetést. Készpénzes fizetésnél a foglalás azonnal megerősítésre kerül.</p>
     `}
   `);
 }
@@ -646,7 +644,7 @@ async function confirmBooking(user, slotId){
   const childId = document.getElementById('bookChild').value;
   const payMethod = document.querySelector('input[name="payMethod"]:checked')?.value;
   if(payMethod==='gateway'){
-    toast('Az online fizetési kapu integrációja még nincs bekötve — válassz Revolutot vagy banki átutalást.');
+    toast('Az online fizetési kapu integrációja még nincs bekötve — válassz banki átutalást vagy készpénzt.');
     return;
   }
   let status = 'pending', packageUsed = false, pkg = null;
@@ -769,7 +767,7 @@ function viewMyBookings(user){
   return `<div class="card"><h3 class="section-title">Foglalásaim</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szolgáltatás</th><th>Gyermek</th><th>Időpont</th><th>Fizetés</th><th>Státusz</th><th>Jelentkezés ideje</th><th>Lemondás ideje</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 function room2label(id){ return roomOf(id).name; }
-function payLabel(m){ return {gateway:'Online kapu', revolut:'Revolut', bank:'Banki átutalás', cash:'Készpénz helyszínen'}[m] || m; }
+function payLabel(m){ return {gateway:'Online kapu', bank:'Banki átutalás', cash:'Készpénz helyszínen'}[m] || m; }
 
 function openCancelModal(user, bookingId){
   const b = db.bookings.find(x=>x.id===bookingId);
@@ -1032,15 +1030,15 @@ function viewAdminPackages(user){
    ========================================================= */
 function viewAdminTherapists(user){
   const rows = db.therapists.map(t=>`<tr>
-    <td>${t.name}<br><span class="muted" style="font-size:0.72rem;">UID: ${t.id}</span></td><td>${t.revolut}</td><td style="font-size:0.78rem;">${t.bank}</td>
+    <td>${t.name}<br><span class="muted" style="font-size:0.72rem;">UID: ${t.id}</span></td><td style="font-size:0.78rem;">${t.bank || '<span class="muted">— nincs megadva —</span>'}</td>
     <td style="white-space:nowrap;"><button class="btn btn-ghost btn-sm" data-edit-therapist="${t.id}">Szerkesztés</button> <button class="btn btn-danger btn-sm" data-delete-therapist="${t.id}">Törlés</button></td>
-  </tr>`).join('') || '<tr><td colspan="4" class="muted">Nincs felvett terapeuta.</td></tr>';
+  </tr>`).join('') || '<tr><td colspan="3" class="muted">Nincs felvett terapeuta.</td></tr>';
   return `<div class="card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
       <h3 class="section-title" style="margin:0;">Terapeuták</h3>
       <button class="btn btn-primary btn-sm" data-add-therapist>+ Új terapeuta</button>
     </div>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Név</th><th>Revolut</th><th>Bankszámla</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Név</th><th>Bankszámla</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
   </div>`;
 }
 
@@ -1055,20 +1053,18 @@ function openTherapistModal(mode, therapistId){
     <form id="therapistForm" style="margin-top:16px;">
       ${!isEdit ? `<div class="field"><label for="terUid">Supabase User UID</label><input type="text" id="terUid" placeholder="pl. 8f2c1e40-....-....-...." required></div>` : ''}
       <div class="field"><label for="terName">Név</label><input type="text" id="terName" value="${isEdit?u.name:''}" required></div>
-      <div class="field"><label for="terRevolut">Revolut felhasználónév</label><input type="text" id="terRevolut" value="${isEdit?t.revolut:''}" required></div>
-      <div class="field"><label for="terBank">Bankszámlaszám (IBAN)</label><input type="text" id="terBank" value="${isEdit?t.bank:''}" required></div>
+      <div class="field"><label for="terBank">Bankszámlaszám (IBAN)</label><input type="text" id="terBank" value="${isEdit?t.bank:''}" placeholder="Megadható később is"></div>
       <button type="submit" class="btn btn-primary btn-block">${isEdit?'Mentés':'Felvétel'}</button>
     </form>
   `);
   document.getElementById('therapistForm').addEventListener('submit', async (e)=>{
     e.preventDefault();
     const name = document.getElementById('terName').value.trim();
-    const revolut = document.getElementById('terRevolut').value.trim();
     const bank = document.getElementById('terBank').value.trim();
     const id = isEdit ? therapistId : document.getElementById('terUid').value.trim();
     const { error: profErr } = await sb.from('profiles').update({ role:'therapist', name }).eq('id', id);
     if(profErr){ toast('Hiba: ' + profErr.message + ' — biztosan létezik ilyen UID-jú felhasználó?'); return; }
-    const { error: detErr } = await sb.from('therapist_details').upsert({ id, revolut, bank_account: bank });
+    const { error: detErr } = await sb.from('therapist_details').upsert({ id, bank_account: bank });
     if(detErr){ toast('Hiba a fizetési adatoknál: ' + detErr.message); return; }
     closeModal(); toast(isEdit?'Terapeuta adatai frissítve.':'Terapeuta felvéve.');
     await refreshDB(); boot();
