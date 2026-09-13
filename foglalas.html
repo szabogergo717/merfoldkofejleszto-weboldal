@@ -250,12 +250,12 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 function uid(prefix){ return prefix + '_' + Math.random().toString(36).slice(2,9); }
 
 /* Memóriában tartott, a nézetek által olvasott "gyorsítótár" — refreshDB() tölti fel Supabase-ből. */
-let db = { users:[], therapists:[], rooms:[], serviceTypes:[], packages:[], slots:[], bookings:[], assignedServices:[] };
+let db = { users:[], therapists:[], rooms:[], serviceTypes:[], packages:[], slots:[], bookings:[] };
 let currentProfile = null;
 let dbReady = false;
 
 async function refreshDB(){
-  const [profilesRes, childrenRes, therRes, roomsRes, svcRes, pkgRes, slotRes, bookRes, waitRes, assignedRes] = await Promise.all([
+  const [profilesRes, childrenRes, therRes, roomsRes, svcRes, pkgRes, slotRes, bookRes, waitRes] = await Promise.all([
     sb.from('profiles').select('*'),
     sb.from('children').select('*'),
     sb.from('therapist_details').select('*'),
@@ -265,9 +265,8 @@ async function refreshDB(){
     sb.from('slots').select('*'),
     sb.from('bookings').select('*'),
     sb.from('waitlist').select('*'),
-    sb.from('assigned_services').select('*'),
   ]);
-  const firstError = [profilesRes,childrenRes,therRes,roomsRes,svcRes,pkgRes,slotRes,bookRes,waitRes,assignedRes].find(r=>r.error);
+  const firstError = [profilesRes,childrenRes,therRes,roomsRes,svcRes,pkgRes,slotRes,bookRes,waitRes].find(r=>r.error);
   if(firstError){
     dbReady = false;
     toast('Nem sikerült elérni az adatbázist: ' + firstError.error.message + ' — futtattad már az SQL scriptet?');
@@ -282,7 +281,6 @@ async function refreshDB(){
   db.serviceTypes = (svcRes.data||[]).map(s=>({ id:s.id, name:s.name, price:s.price, packageEligible:s.package_eligible, adminOnly:s.admin_only, therapistId:s.therapist_id||null }));
   db.packages = (pkgRes.data||[]).map(p=>({ id:p.id, userId:p.user_id, type:p.type, remaining:p.remaining, purchasedAt:p.purchased_at, expiresAt:p.expires_at||null }));
   db.bookings = (bookRes.data||[]).map(b=>({ id:b.id, slotId:b.slot_id, parentId:b.parent_id, childId:b.child_id, paymentMethod:b.payment_method, packageUsed:b.package_used, status:b.status, medicalCert:b.medical_cert_url, refund: b.refund_note ? {label:b.refund_note} : null, createdAt:b.created_at, cancelledAt:b.cancelled_at, invoiceRequested:b.invoice_requested||false }));
-  db.assignedServices = (assignedRes.data||[]).map(a=>({ id:a.id, parentId:a.parent_id, serviceTypeId:a.service_type_id, therapistId:a.therapist_id }));
   const waitlistRows = (waitRes.data||[]).map(w=>({ slotId:w.slot_id, childId:w.child_id, parentId:w.parent_id, addedAt:w.added_at }));
   db.slots = (slotRes.data||[]).map(s=>{
     const bookedChildIds = db.bookings.filter(b=>b.slotId===s.id && b.status!=='cancelled').map(b=>b.childId);
@@ -583,20 +581,11 @@ function upcomingSlots(){
   return db.slots.filter(s=>new Date(s.date) > new Date()).sort((a,b)=>new Date(a.date)-new Date(b.date));
 }
 
-/* Szolgáltatás-láthatóság: ha egy szolgáltatáshoz van legalább egy
-   hozzárendelés (assigned_services), onnantól csak a hozzárendelt szülők
-   látják — a hozzárendelés nélküli szolgáltatások mindenkinek látszanak. */
-function serviceVisibleToParent(serviceTypeId, parentId){
-  const restricted = db.assignedServices.some(a=>a.serviceTypeId===serviceTypeId);
-  if(!restricted) return true;
-  return db.assignedServices.some(a=>a.serviceTypeId===serviceTypeId && a.parentId===parentId);
-}
-
 function viewBook(user){
   const VISIBILITY_DAYS = 60;
   const today = new Date(); today.setHours(0,0,0,0);
   const maxDate = addDays(today, VISIBILITY_DAYS);
-  const visibleSlots = db.slots.filter(s=> new Date(s.date) <= maxDate && serviceVisibleToParent(s.serviceTypeId, user.id));
+  const visibleSlots = db.slots.filter(s=> new Date(s.date) <= maxDate);
   const calendar = renderWeekCalendar(visibleSlots, {
     maxDate,
     hideCount: true,
@@ -934,14 +923,6 @@ function viewTherapistAnnounce(user){
       <button class="btn btn-ghost btn-sm" data-edit-own-service="${s.id}">Szerkesztés</button>
     </div>`).join('') || '<p class="muted">Még nincs saját foglalkozás típusod — vedd fel az alábbi űrlappal.</p>';
 
-  const parents = db.users.filter(u=>u.role==='parent');
-  const parentOpts = parents.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
-  const myAssignments = db.assignedServices.filter(a=>a.therapistId===user.id && ownServices.some(s=>s.id===a.serviceTypeId));
-  const assignmentRows = myAssignments.map(a=>{
-    const svc = serviceOf(a.serviceTypeId); const parent = userOf(a.parentId);
-    return `<tr><td>${parent?parent.name:'—'}</td><td>${svc?svc.name:'—'}</td><td><button class="btn btn-danger btn-sm" data-remove-assignment="${a.id}">Eltávolítás</button></td></tr>`;
-  }).join('') || '<tr><td colspan="3" class="muted">Még nincs hozzárendelt szolgáltatásod.</td></tr>';
-
   return `<div class="card" style="margin-bottom:24px;">
       <h3 class="section-title">Megjelenítési keresztnév</h3>
       <p class="muted" style="margin-bottom:14px;">A szülők a naptárban ezt a nevet látják teljes neved helyett.</p>
@@ -975,17 +956,6 @@ function viewTherapistAnnounce(user){
       </form>
     </div>
   </div>
-    <div class="grid-2" style="margin-bottom:24px;">
-      <div class="card"><h3 class="section-title">Szolgáltatás hozzárendelése szülőhöz</h3>
-        <p class="muted" style="margin-bottom:14px;">Ha egy szolgáltatásodat hozzárendeled egy szülőhöz, onnantól csak az általad hozzárendelt szülők fogják látni azt a foglalkozást a naptárukban — a hozzárendelés nélküli szolgáltatásaid mindenkinek változatlanul láthatók maradnak.</p>
-        <form id="assignServiceForm">
-          <div class="field"><label for="assignParent">Szülő</label><select id="assignParent" required>${parentOpts}</select></div>
-          <div class="field"><label for="assignService">Szolgáltatás</label><select id="assignService" required>${serviceOpts}</select></div>
-          <button type="submit" class="btn btn-primary btn-block" ${ownServices.length===0?'disabled':''}>Hozzárendelés</button>
-        </form>
-      </div>
-      <div class="card"><h3 class="section-title">Jelenlegi hozzárendeléseim</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő</th><th>Szolgáltatás</th><th></th></tr></thead><tbody>${assignmentRows}</tbody></table></div></div>
-    </div>
     <div class="card"><h3 class="section-title">Saját meghirdetett óráim</h3>${calendar}</div>`;
 }
 
@@ -1492,23 +1462,6 @@ function attachViewHandlers(user, tab){
     const { error } = await sb.from('therapist_details').upsert({ id: user.id, display_name: displayName });
     if(error){ toast('Hiba: ' + error.message); return; }
     toast('Megjelenítési név mentve.'); await refreshDB(); boot();
-  });
-
-  const assignServiceForm = document.getElementById('assignServiceForm');
-  if(assignServiceForm) assignServiceForm.addEventListener('submit', async (e)=>{
-    e.preventDefault();
-    const parentId = document.getElementById('assignParent').value;
-    const serviceTypeId = document.getElementById('assignService').value;
-    const { error } = await sb.from('assigned_services').insert({ parent_id: parentId, service_type_id: serviceTypeId, therapist_id: user.id });
-    if(error){ toast('Hiba: ' + (error.message.includes('duplicate') ? 'Ez már hozzá van rendelve ehhez a szülőhöz.' : error.message)); return; }
-    toast('Szolgáltatás hozzárendelve.'); await refreshDB(); boot();
-  });
-  root.querySelectorAll('[data-remove-assignment]').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const { error } = await sb.from('assigned_services').delete().eq('id', btn.dataset.removeAssignment);
-      if(error){ toast('Hiba: ' + error.message); return; }
-      toast('Hozzárendelés eltávolítva.'); await refreshDB(); boot();
-    });
   });
 
   const addServiceTherapistForm = document.getElementById('addServiceTherapistForm');
