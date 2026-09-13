@@ -279,7 +279,7 @@ async function refreshDB(){
 
   db.rooms = (roomsRes.data||[]).map(r=>({ id:r.id, name:r.name, capacity:r.capacity, color:r.color, needsTherapist:r.needs_therapist, rentalFee:r.rental_fee||0, rentalFeeGroup:r.rental_fee_group||0 }));
   db.serviceTypes = (svcRes.data||[]).map(s=>({ id:s.id, name:s.name, price:s.price, packageEligible:s.package_eligible, adminOnly:s.admin_only, therapistId:s.therapist_id||null }));
-  db.packages = (pkgRes.data||[]).map(p=>({ id:p.id, userId:p.user_id, type:p.type, remaining:p.remaining, purchasedAt:p.purchased_at, expiresAt:p.expires_at||null }));
+  db.packages = (pkgRes.data||[]).map(p=>({ id:p.id, userId:p.user_id, childId:p.child_id||null, type:p.type, remaining:p.remaining, purchasedAt:p.purchased_at, expiresAt:p.expires_at||null }));
   db.bookings = (bookRes.data||[]).map(b=>({ id:b.id, slotId:b.slot_id, parentId:b.parent_id, childId:b.child_id, paymentMethod:b.payment_method, packageUsed:b.package_used, status:b.status, medicalCert:b.medical_cert_url, refund: b.refund_note ? {label:b.refund_note} : null, createdAt:b.created_at, cancelledAt:b.cancelled_at, invoiceRequested:b.invoice_requested||false }));
   const waitlistRows = (waitRes.data||[]).map(w=>({ slotId:w.slot_id, childId:w.child_id, parentId:w.parent_id, addedAt:w.added_at }));
   db.slots = (slotRes.data||[]).map(s=>{
@@ -327,6 +327,16 @@ function therapistDisplayName(ther){
   return ther.displayName || ther.name.split(' ').pop();
 }
 function userOf(id){ return db.users.find(u=>u.id===id); }
+/* Aktív bérlet keresése egy szülő+gyermek párhoz — előnyben részesíti a
+   kifejezetten ahhoz a gyermekhez rendelt bérletet, de elfogadja az
+   "akármelyik gyermeknek" (childId nélküli) bérletet is. */
+function findActivePackage(parentId, childId){
+  const now = new Date();
+  const valid = p => p.userId===parentId && p.remaining>0 && (!p.expiresAt || new Date(p.expiresAt) > now);
+  const specific = db.packages.find(p=>valid(p) && p.childId===childId);
+  if(specific) return specific;
+  return db.packages.find(p=>valid(p) && !p.childId);
+}
 
 /* --- naptár segédfüggvények --- */
 const DAY_NAMES_HU = ['Hétfő','Kedd','Szerda','Csütörtök','Péntek','Szombat','Vasárnap'];
@@ -642,13 +652,12 @@ function openAdminBookModal(slotId){
 }
 
 async function confirmAdminBooking(slotId, parentId){
-  const now = new Date();
   const childId = document.getElementById('adminBookChild').value;
   const payMethod = document.querySelector('input[name="adminPayMethod"]:checked')?.value;
   let packageUsed = false, pkg = null;
   if(payMethod==='package'){
-    pkg = db.packages.find(p=>p.userId===parentId && p.remaining>0 && (!p.expiresAt || new Date(p.expiresAt)>now));
-    if(!pkg){ toast('Nincs elérhető bérlet ennél a szülőnél.'); return; }
+    pkg = findActivePackage(parentId, childId);
+    if(!pkg){ toast('Nincs elérhető bérlet ennél a gyermeknél.'); return; }
     packageUsed = true;
   }
   if(packageUsed){
@@ -715,10 +724,9 @@ async function confirmBooking(user, slotId){
     return;
   }
   let packageUsed = false, pkg = null;
-  const now = new Date();
   if(payMethod==='package'){
-    pkg = db.packages.find(p=>p.userId===user.id && p.remaining>0 && (!p.expiresAt || new Date(p.expiresAt) > now));
-    if(!pkg){ toast('Nincs elérhető (nem lejárt) bérleted.'); return; }
+    pkg = findActivePackage(user.id, childId);
+    if(!pkg){ toast('Nincs elérhető (nem lejárt) bérleted ehhez a gyermekhez.'); return; }
     packageUsed = true;
   }
   if(packageUsed){
@@ -893,9 +901,10 @@ function viewPackages(user){
   const rows = pkgs.map(p=>{
     const expired = p.expiresAt && new Date(p.expiresAt) <= now;
     const statusLabel = expired ? '<span class="status-badge status-cancelled">Lejárt</span>' : '<span class="status-badge status-confirmed">Aktív</span>';
-    return `<tr><td>${p.type} alkalmas bérlet</td><td>${p.remaining} alkalom maradt</td><td>${fmtDate(p.purchasedAt)}</td><td>${p.expiresAt?fmtDate(p.expiresAt):'—'}</td><td>${statusLabel}</td></tr>`;
-  }).join('') || '<tr><td colspan="5" class="muted">Nincs aktív bérleted.</td></tr>';
-  return `<div class="card"><h3 class="section-title">Bérleteim</h3><table><thead><tr><th>Típus</th><th>Egyenleg</th><th>Vásárlás dátuma</th><th>Lejárat</th><th>Állapot</th></tr></thead><tbody>${rows}</tbody></table>
+    const child = p.childId ? user.children.find(c=>c.id===p.childId) : null;
+    return `<tr><td>${child?child.name:'<span class="muted">bármelyik gyermek</span>'}</td><td>${p.type} alkalmas bérlet</td><td>${p.remaining} alkalom maradt</td><td>${fmtDate(p.purchasedAt)}</td><td>${p.expiresAt?fmtDate(p.expiresAt):'—'}</td><td>${statusLabel}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="muted">Nincs aktív bérleted.</td></tr>';
+  return `<div class="card"><h3 class="section-title">Bérleteim</h3><table><thead><tr><th>Gyermek</th><th>Típus</th><th>Egyenleg</th><th>Vásárlás dátuma</th><th>Lejárat</th><th>Állapot</th></tr></thead><tbody>${rows}</tbody></table>
   <p class="muted" style="margin-top:16px;">Új bérlet vásárlásához keresd az adminisztrátort vagy a terapeutát — mindketten fel tudják venni neked a rendszerben.</p></div>`;
 }
 
@@ -1121,26 +1130,29 @@ function openAddChildForParentModal(parentId){
 
 function viewAdminPackages(user){
   const parents = db.users.filter(u=>u.role==='parent');
-  const parentOpts = parents.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+  const parentOpts = '<option value="" disabled selected>Válassz szülőt…</option>' + parents.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
   const typeOpts = Array.from({length:12},(_,i)=>i+1).map(n=>`<option value="${n}" ${n===4?'selected':''}>${n} alkalmas</option>`).join('');
   const weekOpts = Array.from({length:10},(_,i)=>i+1).map(n=>`<option value="${n}" ${n===8?'selected':''}>${n} hét</option>`).join('');
   const now = new Date();
   const rows = db.packages.map(p=>{
     const expired = p.expiresAt && new Date(p.expiresAt) <= now;
     const statusLabel = expired ? '<span class="status-badge status-cancelled">Lejárt</span>' : '<span class="status-badge status-confirmed">Aktív</span>';
-    return `<tr><td>${userOf(p.userId)?.name||'—'}</td><td>${p.type} alkalmas</td><td>${p.remaining} maradt</td><td>${fmtDate(p.purchasedAt)}</td><td>${p.expiresAt?fmtDate(p.expiresAt):'—'}</td><td>${statusLabel}</td></tr>`;
-  }).join('') || '<tr><td colspan="6" class="muted">Nincs kiosztott bérlet.</td></tr>';
+    const parent = userOf(p.userId);
+    const child = p.childId ? parent?.children.find(c=>c.id===p.childId) : null;
+    return `<tr><td>${parent?.name||'—'}</td><td>${child?child.name:'<span class="muted">bármelyik gyermek</span>'}</td><td>${p.type} alkalmas</td><td>${p.remaining} maradt</td><td>${fmtDate(p.purchasedAt)}</td><td>${p.expiresAt?fmtDate(p.expiresAt):'—'}</td><td>${statusLabel}</td></tr>`;
+  }).join('') || '<tr><td colspan="7" class="muted">Nincs kiosztott bérlet.</td></tr>';
   return `<div class="grid-2">
     <div class="card"><h3 class="section-title">Bérlet hozzáadása szülőhöz</h3>
       <form id="addPackageForm">
         <div class="field"><label for="pkgParent">Szülő</label><select id="pkgParent" required>${parentOpts}</select></div>
+        <div id="pkgChildWrap"></div>
         <div class="field"><label for="pkgType">Hány alkalmas</label><select id="pkgType" required>${typeOpts}</select></div>
         <div class="field"><label for="pkgWeeks">Érvényesség (hét)</label><select id="pkgWeeks" required>${weekOpts}</select></div>
         <p class="muted" style="margin-bottom:14px;">A bérlet a kiosztástól számított ennyi hét múlva lejár, utána nem használható fel belőle alkalom.</p>
         <button type="submit" class="btn btn-primary btn-block">Hozzáadás</button>
       </form>
     </div>
-    <div class="card"><h3 class="section-title">Kiosztott bérletek</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő</th><th>Típus</th><th>Egyenleg</th><th>Kiosztás dátuma</th><th>Lejárat</th><th>Állapot</th></tr></thead><tbody>${rows}</tbody></table></div></div>
+    <div class="card"><h3 class="section-title">Kiosztott bérletek</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő</th><th>Gyermek</th><th>Típus</th><th>Egyenleg</th><th>Kiosztás dátuma</th><th>Lejárat</th><th>Állapot</th></tr></thead><tbody>${rows}</tbody></table></div></div>
   </div>`;
 }
 
@@ -1518,13 +1530,22 @@ function attachViewHandlers(user, tab){
   });
 
   const addPackageForm = document.getElementById('addPackageForm');
+  const pkgParentSelect = document.getElementById('pkgParent');
+  if(pkgParentSelect) pkgParentSelect.addEventListener('change', (e)=>{
+    const parent = userOf(e.target.value);
+    const wrap = document.getElementById('pkgChildWrap');
+    if(!parent || parent.children.length===0){ wrap.innerHTML = ''; return; }
+    const childOpts = '<option value="">— bármelyik gyermeke —</option>' + parent.children.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+    wrap.innerHTML = `<div class="field"><label for="pkgChild">Gyermek</label><select id="pkgChild">${childOpts}</select></div>`;
+  });
   if(addPackageForm) addPackageForm.addEventListener('submit', async (e)=>{
     e.preventDefault();
     const type = parseInt(document.getElementById('pkgType').value,10);
     const weeks = parseInt(document.getElementById('pkgWeeks').value,10);
     const expiresAt = new Date(Date.now() + weeks*7*24*60*60*1000).toISOString();
+    const childId = document.getElementById('pkgChild')?.value || null;
     const { error } = await sb.from('packages').insert({
-      user_id: document.getElementById('pkgParent').value, type, remaining: type, expires_at: expiresAt,
+      user_id: document.getElementById('pkgParent').value, child_id: childId, type, remaining: type, expires_at: expiresAt,
     });
     if(error){ toast('Hiba: ' + error.message); return; }
     toast('Bérlet hozzáadva.'); await refreshDB(); boot();
