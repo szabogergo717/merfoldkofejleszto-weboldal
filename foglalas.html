@@ -250,12 +250,12 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 function uid(prefix){ return prefix + '_' + Math.random().toString(36).slice(2,9); }
 
 /* Memóriában tartott, a nézetek által olvasott "gyorsítótár" — refreshDB() tölti fel Supabase-ből. */
-let db = { users:[], therapists:[], rooms:[], serviceTypes:[], packages:[], slots:[], bookings:[] };
+let db = { users:[], therapists:[], rooms:[], serviceTypes:[], packages:[], slots:[], bookings:[], assignedServices:[] };
 let currentProfile = null;
 let dbReady = false;
 
 async function refreshDB(){
-  const [profilesRes, childrenRes, therRes, roomsRes, svcRes, pkgRes, slotRes, bookRes, waitRes] = await Promise.all([
+  const [profilesRes, childrenRes, therRes, roomsRes, svcRes, pkgRes, slotRes, bookRes, waitRes, assignedRes] = await Promise.all([
     sb.from('profiles').select('*'),
     sb.from('children').select('*'),
     sb.from('therapist_details').select('*'),
@@ -265,8 +265,9 @@ async function refreshDB(){
     sb.from('slots').select('*'),
     sb.from('bookings').select('*'),
     sb.from('waitlist').select('*'),
+    sb.from('assigned_services').select('*'),
   ]);
-  const firstError = [profilesRes,childrenRes,therRes,roomsRes,svcRes,pkgRes,slotRes,bookRes,waitRes].find(r=>r.error);
+  const firstError = [profilesRes,childrenRes,therRes,roomsRes,svcRes,pkgRes,slotRes,bookRes,waitRes,assignedRes].find(r=>r.error);
   if(firstError){
     dbReady = false;
     toast('Nem sikerült elérni az adatbázist: ' + firstError.error.message + ' — futtattad már az SQL scriptet?');
@@ -278,9 +279,10 @@ async function refreshDB(){
   const therDetails = therRes.data || [];
 
   db.rooms = (roomsRes.data||[]).map(r=>({ id:r.id, name:r.name, capacity:r.capacity, color:r.color, needsTherapist:r.needs_therapist, rentalFee:r.rental_fee||0, rentalFeeGroup:r.rental_fee_group||0 }));
-  db.serviceTypes = (svcRes.data||[]).map(s=>({ id:s.id, name:s.name, price:s.price, packageEligible:s.package_eligible, adminOnly:s.admin_only, therapistId:s.therapist_id||null, isAssessment:s.is_assessment||false }));
-  db.packages = (pkgRes.data||[]).map(p=>({ id:p.id, userId:p.user_id, type:p.type, remaining:p.remaining, purchasedAt:p.purchased_at }));
+  db.serviceTypes = (svcRes.data||[]).map(s=>({ id:s.id, name:s.name, price:s.price, packageEligible:s.package_eligible, adminOnly:s.admin_only, therapistId:s.therapist_id||null }));
+  db.packages = (pkgRes.data||[]).map(p=>({ id:p.id, userId:p.user_id, type:p.type, remaining:p.remaining, purchasedAt:p.purchased_at, expiresAt:p.expires_at||null }));
   db.bookings = (bookRes.data||[]).map(b=>({ id:b.id, slotId:b.slot_id, parentId:b.parent_id, childId:b.child_id, paymentMethod:b.payment_method, packageUsed:b.package_used, status:b.status, medicalCert:b.medical_cert_url, refund: b.refund_note ? {label:b.refund_note} : null, createdAt:b.created_at, cancelledAt:b.cancelled_at, invoiceRequested:b.invoice_requested||false }));
+  db.assignedServices = (assignedRes.data||[]).map(a=>({ id:a.id, parentId:a.parent_id, serviceTypeId:a.service_type_id, therapistId:a.therapist_id }));
   const waitlistRows = (waitRes.data||[]).map(w=>({ slotId:w.slot_id, childId:w.child_id, parentId:w.parent_id, addedAt:w.added_at }));
   db.slots = (slotRes.data||[]).map(s=>{
     const bookedChildIds = db.bookings.filter(b=>b.slotId===s.id && b.status!=='cancelled').map(b=>b.childId);
@@ -289,7 +291,7 @@ async function refreshDB(){
   });
   db.therapists = profiles.filter(p=>p.role==='therapist').map(p=>{
     const det = therDetails.find(d=>d.id===p.id) || {};
-    return { id:p.id, name:p.name, bank:det.bank_account||'', invoicingConnected:det.invoicing_connected||false };
+    return { id:p.id, name:p.name, bank:det.bank_account||'', invoicingConnected:det.invoicing_connected||false, displayName:det.display_name||'' };
   });
   db.users = profiles.map(p=>({
     id:p.id, role:p.role, name:p.name, phone:p.phone||'',
@@ -320,6 +322,12 @@ function fmtDateTimeFull(iso){
 function roomOf(id){ return db.rooms.find(r=>r.id===id); }
 function serviceOf(id){ return db.serviceTypes.find(s=>s.id===id); }
 function therapistOf(id){ return db.therapists.find(t=>t.id===id); }
+/* A szülő a terapeuta keresztnevét (vagy a terapeuta által megadott
+   megjelenítési nevet) látja a teljes név helyett. */
+function therapistDisplayName(ther){
+  if(!ther) return 'Nincs terapeuta';
+  return ther.displayName || ther.name.split(' ').pop();
+}
 function userOf(id){ return db.users.find(u=>u.id===id); }
 
 /* --- naptár segédfüggvények --- */
@@ -361,10 +369,12 @@ function renderWeekCalendar(slots, opts){
         const time = new Date(s.date).toLocaleTimeString('hu-HU',{hour:'2-digit',minute:'2-digit'});
         const isOwn = opts.ownId && ther && ther.id===opts.ownId;
         const action = opts.actionRenderer ? opts.actionRenderer(s, full, isPast) : '';
+        const countLabel = opts.hideCount ? (full ? 'Betelt' : 'Van szabad hely') : `${s.bookedChildIds.length}/${s.capacity} fő`;
+        const therName = ther ? (opts.therapistNameFn ? opts.therapistNameFn(ther) : ther.name) : 'Nincs terapeuta';
         return `<div class="cal-slot ${isOwn?'own':''}">
-          <div class="cal-slot-top"><strong>${time}</strong><span class="pill ${full?'full':''}">${s.bookedChildIds.length}/${s.capacity} fő</span></div>
+          <div class="cal-slot-top"><strong>${time}</strong><span class="pill ${full?'full':''}">${countLabel}</span></div>
           <div class="cal-slot-service">${service.name}</div>
-          ${opts.showTherapist!==false ? `<div class="cal-slot-ther">${ther ? ther.name : 'Nincs terapeuta'}${isOwn?' · Sajátom':''}</div>` : ''}
+          ${opts.showTherapist!==false ? `<div class="cal-slot-ther">${therName}${isOwn?' · Sajátom':''}</div>` : ''}
           ${action}
         </div>`;
       }).join('');
@@ -526,7 +536,7 @@ function boot(){
   const tabsByRole = {
     parent: [['book','Naptár & Foglalás'],['mybookings','Foglalásaim'],['children','Gyermekeim'],['packages','Bérletem']],
     therapist: [['calendar','Csapatnaptár'],['announce','Saját órák kiírása'],['payments','Fizetések'],['packages','Bérletek']],
-    admin: [['calendar','Naptár'],['manage_bookings','Foglalások / fizetések'],['manage_packages','Bérletek'],['manage_therapists','Terapeuták'],['manage_rooms','Helyiségek'],['manage_services','Szolgáltatások & árak'],['rental','Terembérleti díjak']],
+    admin: [['calendar','Naptár'],['manage_bookings','Foglalások / fizetések'],['manage_packages','Bérletek'],['manage_parents','Szülők'],['manage_therapists','Terapeuták'],['manage_rooms','Helyiségek'],['manage_services','Szolgáltatások & árak'],['rental','Terembérleti díjak']],
   };
   const tabs = tabsByRole[user.role];
   currentTab = currentTab && tabs.some(t=>t[0]===currentTab) ? currentTab : tabs[0][0];
@@ -557,6 +567,7 @@ function renderView(user, tab){
     if(tab==='calendar') root.innerHTML = viewAdminCalendar(user);
     if(tab==='manage_bookings') root.innerHTML = viewAdminBookings(user);
     if(tab==='manage_packages') root.innerHTML = viewAdminPackages(user);
+    if(tab==='manage_parents') root.innerHTML = viewAdminParents(user);
     if(tab==='manage_therapists') root.innerHTML = viewAdminTherapists(user);
     if(tab==='manage_rooms') root.innerHTML = viewAdminRooms(user);
     if(tab==='manage_services') root.innerHTML = viewAdminServices(user);
@@ -572,48 +583,118 @@ function upcomingSlots(){
   return db.slots.filter(s=>new Date(s.date) > new Date()).sort((a,b)=>new Date(a.date)-new Date(b.date));
 }
 
+/* Szolgáltatás-láthatóság: ha egy szolgáltatáshoz van legalább egy
+   hozzárendelés (assigned_services), onnantól csak a hozzárendelt szülők
+   látják — a hozzárendelés nélküli szolgáltatások mindenkinek látszanak. */
+function serviceVisibleToParent(serviceTypeId, parentId){
+  const restricted = db.assignedServices.some(a=>a.serviceTypeId===serviceTypeId);
+  if(!restricted) return true;
+  return db.assignedServices.some(a=>a.serviceTypeId===serviceTypeId && a.parentId===parentId);
+}
+
 function viewBook(user){
   const VISIBILITY_DAYS = 60;
   const today = new Date(); today.setHours(0,0,0,0);
   const maxDate = addDays(today, VISIBILITY_DAYS);
-  const visibleSlots = db.slots.filter(s=> new Date(s.date) <= maxDate);
+  const visibleSlots = db.slots.filter(s=> new Date(s.date) <= maxDate && serviceVisibleToParent(s.serviceTypeId, user.id));
   const calendar = renderWeekCalendar(visibleSlots, {
     maxDate,
+    hideCount: true,
+    therapistNameFn: therapistDisplayName,
     actionRenderer: (s, full, isPast) => isPast
       ? '<span class="cal-slot-past">Elmúlt</span>'
       : `<button class="btn btn-primary btn-sm cal-slot-btn" data-book-slot="${s.id}">${full?'Várólistára':'Foglalás'}</button>`,
   });
-  const suggested = new URLSearchParams(window.location.search).get('szolgaltatas');
-  const suggestedBanner = suggested
-    ? `<div class="pay-detail-box" style="margin-bottom:18px;"><div><span>A főoldal kérdéssora alapján ajánlott</span><span><strong>${suggested}</strong></span></div></div>`
-    : '';
-  return `<div class="card"><h3 class="section-title">Naptár — foglalj egy szabad időpontra</h3>${suggestedBanner}
+  return `<div class="card"><h3 class="section-title">Naptár — foglalj egy szabad időpontra</h3>
     <p class="muted" style="margin-bottom:8px;">A hétre meghirdetett időpontok teremenként csoportosítva. Kattints egy "Foglalás" gombra a részletekhez.</p>
     <p class="muted" style="margin-bottom:18px;font-size:0.82rem;">⏳ A rendszer mindig automatikusan, ${VISIBILITY_DAYS} nappal előre nyitja meg az időpontokat — ez nem kézi beállítás, a naptár magától "gördül" előre nap mint nap.</p>
     ${calendar}</div>`;
+}
+
+/* ADMIN: foglalás rögzítése egy gyermeknek a szülő helyett */
+function openAdminBookModal(slotId){
+  const s = db.slots.find(x=>x.id===slotId);
+  const room = roomOf(s.roomId); const service = serviceOf(s.serviceTypeId); const ther = s.therapistId ? therapistOf(s.therapistId) : null;
+  const parents = db.users.filter(u=>u.role==='parent');
+  const parentOpts = '<option value="" disabled selected>Válassz szülőt…</option>' + parents.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+  openModal(`
+    <button class="modal-close" data-close>&times;</button>
+    <h3>${service.name}</h3>
+    <p class="muted">${room.name} · ${fmtDate(s.date)} · ${s.duration} perc ${ther? '· '+ther.name : ''}</p>
+    <div class="field" style="margin-top:18px;">
+      <label for="adminBookParent">Szülő</label>
+      <select id="adminBookParent">${parentOpts}</select>
+    </div>
+    <div id="adminBookRest"></div>
+  `);
+  document.getElementById('adminBookParent').addEventListener('change', (e)=>{
+    const parent = parents.find(p=>p.id===e.target.value);
+    const rest = document.getElementById('adminBookRest');
+    if(!parent || parent.children.length===0){
+      rest.innerHTML = '<p class="muted" style="margin-top:14px;">Ennek a szülőnek még nincs rögzített gyermeke.</p>';
+      return;
+    }
+    const childOpts = parent.children.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+    const now = new Date();
+    const activePkg = db.packages.find(p=>p.userId===parent.id && p.remaining>0 && (!p.expiresAt || new Date(p.expiresAt)>now));
+    rest.innerHTML = `
+      <div class="field" style="margin-top:14px;"><label for="adminBookChild">Gyermek</label><select id="adminBookChild">${childOpts}</select></div>
+      <fieldset style="border:none;padding:0;margin:14px 0 0;">
+        <legend style="font-size:0.86rem;font-weight:700;color:var(--teal-deep);margin-bottom:8px;">Fizetés módja</legend>
+        <div class="pay-options">
+          ${activePkg?`<label class="pay-option"><input type="radio" name="adminPayMethod" value="package" checked><strong>Bérlet felhasználása</strong><span>${activePkg.remaining} alkalom maradt</span></label>`:''}
+          <label class="pay-option"><input type="radio" name="adminPayMethod" value="bank" ${!activePkg?'checked':''}><strong>Banki átutalás</strong></label>
+          <label class="pay-option"><input type="radio" name="adminPayMethod" value="cash"><strong>Készpénz a helyszínen</strong></label>
+        </div>
+      </fieldset>
+      <button class="btn btn-primary btn-block" style="margin-top:16px;" id="confirmAdminBooking" data-slot="${s.id}" data-parent="${parent.id}">Foglalás rögzítése</button>
+    `;
+  });
+}
+
+async function confirmAdminBooking(slotId, parentId){
+  const now = new Date();
+  const childId = document.getElementById('adminBookChild').value;
+  const payMethod = document.querySelector('input[name="adminPayMethod"]:checked')?.value;
+  let packageUsed = false, pkg = null;
+  if(payMethod==='package'){
+    pkg = db.packages.find(p=>p.userId===parentId && p.remaining>0 && (!p.expiresAt || new Date(p.expiresAt)>now));
+    if(!pkg){ toast('Nincs elérhető bérlet ennél a szülőnél.'); return; }
+    packageUsed = true;
+  }
+  if(packageUsed){
+    const { error: pkgErr } = await sb.from('packages').update({ remaining: pkg.remaining-1 }).eq('id', pkg.id);
+    if(pkgErr){ toast('Hiba a bérlet frissítésekor: ' + pkgErr.message); return; }
+  }
+  const { data, error } = await sb.from('bookings').insert({
+    slot_id: slotId, parent_id: parentId, child_id: childId,
+    payment_method: payMethod, package_used: packageUsed, status: 'confirmed',
+  }).select().single();
+  if(error){ toast('Hiba a foglaláskor: ' + error.message); return; }
+  closeModal();
+  toast('Foglalás rögzítve.');
+  notifyNewBooking(data.id).catch(()=>{});
+  await refreshDB();
+  boot();
 }
 
 function openBookingModal(user, slotId){
   const s = db.slots.find(x=>x.id===slotId);
   const room = roomOf(s.roomId); const service = serviceOf(s.serviceTypeId); const ther = s.therapistId ? therapistOf(s.therapistId) : null;
   const full = s.bookedChildIds.length >= s.capacity;
-  const activePkg = db.packages.find(p=>p.userId===user.id && p.remaining>0);
+  const now = new Date();
+  const activePkg = db.packages.find(p=>p.userId===user.id && p.remaining>0 && (!p.expiresAt || new Date(p.expiresAt) > now));
   if(user.children.length===0){
     openModal(`<button class="modal-close" data-close>&times;</button><h3>Előbb adj hozzá egy gyermeket</h3><p class="muted" style="margin-top:8px;">A foglaláshoz legalább egy gyermeket rögzítened kell a "Gyermekeim" fülön.</p>`);
     return;
   }
-  const eligibleChildren = service.isAssessment ? user.children : user.children.filter(c=>childHasAssessment(c.id));
-  if(eligibleChildren.length===0){
-    openModal(`<button class="modal-close" data-close>&times;</button><h3>Előbb egy felmérésre van szükség</h3><p class="muted" style="margin-top:8px;">Ez a foglalkozás nem az első alkalomra való. Gyermeked számára először egy <strong>Felmérés / vizsgálat</strong> típusú időpontot kell foglalnod a naptárban — utána nyílnak meg a többi foglalkozások.</p>`);
-    return;
-  }
-  const childOptions = eligibleChildren.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+  const childOptions = user.children.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
   const bankInfo = (ther ? ther.bank : (db.therapists[0] ? db.therapists[0].bank : '')) || 'Egyeztetés a terapeutával';
+  const therName = therapistDisplayName(ther);
   openModal(`
     <button class="modal-close" data-close>&times;</button>
     <h3>${service.name}</h3>
-    <p class="muted">${room.name} · ${fmtDate(s.date)} · ${s.duration} perc ${ther? '· '+ther.name : ''}</p>
-    ${service.isAssessment ? '<p class="badge-inline" style="background:var(--ok-bg);color:var(--teal-deep);">Első alkalomra is foglalható</p>' : ''}
+    <p class="muted">${room.name} · ${fmtDate(s.date)} · ${s.duration} perc ${ther? '· '+therName : ''}</p>
     ${full ? '<p class="badge-inline">A terem betelt — várólistára kerülsz</p>' : ''}
     <div class="field" style="margin-top:18px;">
       <label for="bookChild">Melyik gyermek jön?</label>
@@ -623,19 +704,15 @@ function openBookingModal(user, slotId){
     <fieldset style="border:none;padding:0;margin:14px 0 0;">
       <legend style="font-size:0.86rem;font-weight:700;color:var(--teal-deep);margin-bottom:8px;">Fizetés módja</legend>
       <div class="pay-options">
-        ${activePkg ? `<label class="pay-option"><input type="radio" name="payMethod" value="package" checked><strong>Bérlet felhasználása</strong><span>${activePkg.remaining} alkalom maradt a ${activePkg.type}-es bérletből</span></label>` : ''}
+        ${activePkg ? `<label class="pay-option"><input type="radio" name="payMethod" value="package" checked><strong>Bérlet felhasználása</strong><span>${activePkg.remaining} alkalom maradt a ${activePkg.type} alkalmas bérletből</span></label>` : ''}
         <label class="pay-option"><input type="radio" name="payMethod" value="gateway" ${!activePkg?'checked':''}><strong>Online fizetési kapu <span class="badge-inline">Hamarosan</span></strong><span>Bankkártyás fizetés (Barion/Stripe — integráció folyamatban)</span></label>
         <label class="pay-option"><input type="radio" name="payMethod" value="bank"><strong>Banki átutalás</strong><span>${bankInfo}</span></label>
-        <label class="pay-option"><input type="radio" name="payMethod" value="cash"><strong>Készpénz a helyszínen</strong><span>Fizetés az alkalom napján, azonnal megerősített foglalás</span></label>
+        <label class="pay-option"><input type="radio" name="payMethod" value="cash"><strong>Készpénz a helyszínen</strong><span>Fizetés az alkalom napján</span></label>
       </div>
     </fieldset>
-    <div class="checkbox-row">
-      <input type="checkbox" id="invoiceRequested">
-      <label for="invoiceRequested">Kérek számlát erről a foglalásról (a regisztrációkor megadott számlázási adatokra)</label>
-    </div>
     <div class="pay-detail-box" style="margin-top:14px;"><div><span>Fizetendő</span><span><strong>${fmtHUF(service.price)}</strong></span></div></div>
     <button class="btn btn-primary btn-block" style="margin-top:16px;" id="confirmBooking" data-slot="${s.id}">Foglalás megerősítése</button>
-    <p class="muted" style="margin-top:10px;font-size:0.78rem;">Banki átutalás választása esetén a foglalás "fizetésre vár" státusszal jön létre, a terapeuta vagy az admin igazolja vissza a beérkezett fizetést. Készpénzes fizetésnél a foglalás azonnal megerősítésre kerül.</p>
+    <p class="muted" style="margin-top:10px;font-size:0.78rem;">A foglalás minden fizetési mód esetén azonnal megerősítésre kerül — banki átutalásnál a fizetést utólag rendezitek.</p>
     `}
   `);
 }
@@ -648,26 +725,24 @@ async function confirmBooking(user, slotId){
     toast('Az online fizetési kapu integrációja még nincs bekötve — válassz banki átutalást vagy készpénzt.');
     return;
   }
-  let status = 'pending', packageUsed = false, pkg = null;
+  let packageUsed = false, pkg = null;
+  const now = new Date();
   if(payMethod==='package'){
-    pkg = db.packages.find(p=>p.userId===user.id && p.remaining>0);
-    if(!pkg){ toast('Nincs elérhető bérleted.'); return; }
-    packageUsed = true; status = 'confirmed';
-  } else if(payMethod==='cash'){
-    status = 'confirmed';
+    pkg = db.packages.find(p=>p.userId===user.id && p.remaining>0 && (!p.expiresAt || new Date(p.expiresAt) > now));
+    if(!pkg){ toast('Nincs elérhető (nem lejárt) bérleted.'); return; }
+    packageUsed = true;
   }
   if(packageUsed){
     const { error: pkgErr } = await sb.from('packages').update({ remaining: pkg.remaining - 1 }).eq('id', pkg.id);
     if(pkgErr){ toast('Hiba a bérlet frissítésekor: ' + pkgErr.message); return; }
   }
-  const invoiceRequested = document.getElementById('invoiceRequested')?.checked || false;
   const { data, error } = await sb.from('bookings').insert({
     slot_id: slotId, parent_id: user.id, child_id: childId,
-    payment_method: payMethod, package_used: packageUsed, status, invoice_requested: invoiceRequested,
+    payment_method: payMethod, package_used: packageUsed, status: 'confirmed',
   }).select().single();
   if(error){ toast('Hiba a foglaláskor: ' + error.message); return; }
   closeModal();
-  toast(status==='confirmed' ? 'Foglalás megerősítve!' : 'Foglalás rögzítve, fizetésre vár. Nézd meg a "Foglalásaim" fülön az átutalási adatokat!');
+  toast('Foglalás megerősítve!');
   notifyNewBooking(data.id).catch(()=>{});
   await refreshDB();
   boot();
@@ -705,6 +780,15 @@ async function notifyWaitlist(slotId){
   });
 }
 
+/* Lemondáskor a terapeuta és a szülő is emailt kap a részletekkel. */
+async function notifyCancellation(bookingId){
+  await fetch(SUPABASE_URL + '/functions/v1/send-cancellation-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SUPABASE_ANON_KEY },
+    body: JSON.stringify({ bookingId }),
+  });
+}
+
 function offerIcsDownload(booking, slot){
   const service = serviceOf(slot.serviceTypeId);
   const start = new Date(slot.date);
@@ -722,18 +806,6 @@ function offerIcsDownload(booking, slot){
 /* =========================================================
    SZÜLŐ: FOGLALÁSAIM (lemondás)
    ========================================================= */
-/* Első alkalom szabály: egy gyermek csak akkor foglalhat "rendes" (nem felmérés)
-   szolgáltatásra, ha már van korábbi, nem lemondott foglalása egy "is_assessment"
-   típusú szolgáltatásra. */
-function childHasAssessment(childId){
-  return db.bookings.some(b=>{
-    if(b.childId!==childId || b.status==='cancelled') return false;
-    const slot = db.slots.find(x=>x.id===b.slotId);
-    if(!slot) return false;
-    const service = serviceOf(slot.serviceTypeId);
-    return service && service.isAssessment;
-  });
-}
 
 function cancellationTier(slotDate){
   const hours = (new Date(slotDate) - new Date())/36e5;
@@ -798,6 +870,7 @@ async function doCancel(user, bookingId){
   }
   closeModal();
   toast('Foglalás lemondva. ' + tier.label + '.');
+  notifyCancellation(bookingId).catch(()=>{});
   if(s.waitlist && s.waitlist.length>0){
     notifyWaitlist(s.id).catch(()=>{});
   }
@@ -827,9 +900,14 @@ function viewChildren(user){
    ========================================================= */
 function viewPackages(user){
   const pkgs = db.packages.filter(p=>p.userId===user.id);
-  const rows = pkgs.map(p=>`<tr><td>${p.type} alkalmas bérlet</td><td>${p.remaining} alkalom maradt</td><td>${fmtDate(p.purchasedAt)}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">Nincs aktív bérleted.</td></tr>';
-  return `<div class="card"><h3 class="section-title">Bérleteim</h3><table><thead><tr><th>Típus</th><th>Egyenleg</th><th>Vásárlás dátuma</th></tr></thead><tbody>${rows}</tbody></table>
-  <p class="muted" style="margin-top:16px;">Új bérlet vásárlásához keresd az adminisztrátort — jelenleg ezt ők rögzítik a rendszerben a fizetés beérkezése után.</p></div>`;
+  const now = new Date();
+  const rows = pkgs.map(p=>{
+    const expired = p.expiresAt && new Date(p.expiresAt) <= now;
+    const statusLabel = expired ? '<span class="status-badge status-cancelled">Lejárt</span>' : '<span class="status-badge status-confirmed">Aktív</span>';
+    return `<tr><td>${p.type} alkalmas bérlet</td><td>${p.remaining} alkalom maradt</td><td>${fmtDate(p.purchasedAt)}</td><td>${p.expiresAt?fmtDate(p.expiresAt):'—'}</td><td>${statusLabel}</td></tr>`;
+  }).join('') || '<tr><td colspan="5" class="muted">Nincs aktív bérleted.</td></tr>';
+  return `<div class="card"><h3 class="section-title">Bérleteim</h3><table><thead><tr><th>Típus</th><th>Egyenleg</th><th>Vásárlás dátuma</th><th>Lejárat</th><th>Állapot</th></tr></thead><tbody>${rows}</tbody></table>
+  <p class="muted" style="margin-top:16px;">Új bérlet vásárlásához keresd az adminisztrátort vagy a terapeutát — mindketten fel tudják venni neked a rendszerben.</p></div>`;
 }
 
 /* =========================================================
@@ -841,6 +919,7 @@ function viewTherapistTeamCalendar(user){
 }
 
 function viewTherapistAnnounce(user){
+  const ther = therapistOf(user.id);
   const ownSlots = db.slots.filter(s=>s.therapistId===user.id);
   const calendar = renderWeekCalendar(ownSlots, {
     showTherapist:false,
@@ -851,10 +930,29 @@ function viewTherapistAnnounce(user){
   const serviceOpts = ownServices.map(s=>`<option value="${s.id}">${s.name} — ${fmtHUF(s.price)}</option>`).join('')
     || '<option value="" disabled selected>Előbb vegyél fel egy saját foglalkozást lent</option>';
   const ownServiceRows = ownServices.map(s=>`<div class="slot-item" style="margin-bottom:10px;">
-      <div class="slot-info"><h4>${s.name}${s.isAssessment?' <span class="pill">Felmérés</span>':''}</h4><div class="slot-meta"><span>💳 ${fmtHUF(s.price)}</span><span>${s.packageEligible?'Bérlettel is':'Csak alkalmanként'}</span></div></div>
+      <div class="slot-info"><h4>${s.name}</h4><div class="slot-meta"><span>💳 ${fmtHUF(s.price)}</span><span>${s.packageEligible?'Bérlettel is':'Csak alkalmanként'}</span></div></div>
       <button class="btn btn-ghost btn-sm" data-edit-own-service="${s.id}">Szerkesztés</button>
     </div>`).join('') || '<p class="muted">Még nincs saját foglalkozás típusod — vedd fel az alábbi űrlappal.</p>';
-  return `<div class="grid-2" style="margin-bottom:24px;">
+
+  const parents = db.users.filter(u=>u.role==='parent');
+  const parentOpts = parents.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+  const myAssignments = db.assignedServices.filter(a=>a.therapistId===user.id && ownServices.some(s=>s.id===a.serviceTypeId));
+  const assignmentRows = myAssignments.map(a=>{
+    const svc = serviceOf(a.serviceTypeId); const parent = userOf(a.parentId);
+    return `<tr><td>${parent?parent.name:'—'}</td><td>${svc?svc.name:'—'}</td><td><button class="btn btn-danger btn-sm" data-remove-assignment="${a.id}">Eltávolítás</button></td></tr>`;
+  }).join('') || '<tr><td colspan="3" class="muted">Még nincs hozzárendelt szolgáltatásod.</td></tr>';
+
+  return `<div class="card" style="margin-bottom:24px;">
+      <h3 class="section-title">Megjelenítési keresztnév</h3>
+      <p class="muted" style="margin-bottom:14px;">A szülők a naptárban ezt a nevet látják teljes neved helyett.</p>
+      <form id="displayNameForm">
+        <div class="field-row">
+          <div class="field"><label for="displayNameInput">Keresztnév</label><input type="text" id="displayNameInput" value="${ther?ther.displayName:''}" placeholder="pl. Dóra"></div>
+          <div class="field" style="align-self:flex-end;"><button type="submit" class="btn btn-primary btn-block">Mentés</button></div>
+        </div>
+      </form>
+    </div>
+    <div class="grid-2" style="margin-bottom:24px;">
     <div class="card"><h3 class="section-title">Új óra kiírása</h3>
       <form id="addSlotForm" data-mode="therapist">
         <div class="field"><label for="slotDate">Dátum és idő</label><input type="datetime-local" id="slotDate" required></div>
@@ -872,12 +970,22 @@ function viewTherapistAnnounce(user){
       <form id="addServiceTherapistForm">
         <div class="field"><label for="tSvcName">Foglalkozás neve</label><input type="text" id="tSvcName" required></div>
         <div class="field"><label for="tSvcPrice">Ár (Ft)</label><input type="number" id="tSvcPrice" min="0" step="500" value="6000" required></div>
-        <div class="checkbox-row"><input type="checkbox" id="tSvcPackageEligible" checked><label for="tSvcPackageEligible">Igénybe vehető bérlettel (4-es / 8-as)</label></div>
-        <div class="checkbox-row"><input type="checkbox" id="tSvcIsAssessment"><label for="tSvcIsAssessment">Ez felmérés / vizsgálat típusú — erre foglalhat egy gyermek első alkalommal</label></div>
+        <div class="checkbox-row"><input type="checkbox" id="tSvcPackageEligible" checked><label for="tSvcPackageEligible">Igénybe vehető bérlettel</label></div>
         <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">Felvétel</button>
       </form>
     </div>
   </div>
+    <div class="grid-2" style="margin-bottom:24px;">
+      <div class="card"><h3 class="section-title">Szolgáltatás hozzárendelése szülőhöz</h3>
+        <p class="muted" style="margin-bottom:14px;">Ha egy szolgáltatásodat hozzárendeled egy szülőhöz, onnantól csak az általad hozzárendelt szülők fogják látni azt a foglalkozást a naptárukban — a hozzárendelés nélküli szolgáltatásaid mindenkinek változatlanul láthatók maradnak.</p>
+        <form id="assignServiceForm">
+          <div class="field"><label for="assignParent">Szülő</label><select id="assignParent" required>${parentOpts}</select></div>
+          <div class="field"><label for="assignService">Szolgáltatás</label><select id="assignService" required>${serviceOpts}</select></div>
+          <button type="submit" class="btn btn-primary btn-block" ${ownServices.length===0?'disabled':''}>Hozzárendelés</button>
+        </form>
+      </div>
+      <div class="card"><h3 class="section-title">Jelenlegi hozzárendeléseim</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő</th><th>Szolgáltatás</th><th></th></tr></thead><tbody>${assignmentRows}</tbody></table></div></div>
+    </div>
     <div class="card"><h3 class="section-title">Saját meghirdetett óráim</h3>${calendar}</div>`;
 }
 
@@ -889,8 +997,7 @@ function openOwnServiceModal(user, serviceId){
     <form id="ownServiceForm" style="margin-top:16px;">
       <div class="field"><label for="oSvcName">Foglalkozás neve</label><input type="text" id="oSvcName" value="${s.name}" required></div>
       <div class="field"><label for="oSvcPrice">Ár (Ft)</label><input type="number" id="oSvcPrice" min="0" step="500" value="${s.price}" required></div>
-      <div class="checkbox-row"><input type="checkbox" id="oSvcPackageEligible" ${s.packageEligible?'checked':''}><label for="oSvcPackageEligible">Igénybe vehető bérlettel (4-es / 8-as)</label></div>
-      <div class="checkbox-row"><input type="checkbox" id="oSvcIsAssessment" ${s.isAssessment?'checked':''}><label for="oSvcIsAssessment">Ez felmérés / vizsgálat típusú — erre foglalhat egy gyermek első alkalommal</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="oSvcPackageEligible" ${s.packageEligible?'checked':''}><label for="oSvcPackageEligible">Igénybe vehető bérlettel</label></div>
       <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">Mentés</button>
     </form>
   `);
@@ -900,7 +1007,6 @@ function openOwnServiceModal(user, serviceId){
       name: document.getElementById('oSvcName').value.trim(),
       price: parseInt(document.getElementById('oSvcPrice').value,10),
       package_eligible: document.getElementById('oSvcPackageEligible').checked,
-      is_assessment: document.getElementById('oSvcIsAssessment').checked,
     }).eq('id', serviceId);
     if(error){ toast('Hiba: ' + error.message); return; }
     closeModal(); toast('Foglalkozás frissítve.'); await refreshDB(); boot();
@@ -954,7 +1060,7 @@ function viewAdminCalendar(user){
     return `<option value="${s.id}">${s.name}${ther ? ' ('+ther.name+')' : ' (központi)'} — ${fmtHUF(s.price)}</option>`;
   }).join('');
   const calendar = renderWeekCalendar(db.slots, {
-    actionRenderer: (s) => `<button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
+    actionRenderer: (s) => `<button class="btn btn-primary btn-sm cal-slot-btn" data-admin-book-slot="${s.id}" style="margin-bottom:4px;">Foglalás felvétele</button><button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
   });
 
   return `<div class="grid-2" style="margin-bottom:24px;">
@@ -1004,19 +1110,67 @@ function viewAdminBookings(user){
 /* =========================================================
    BÉRLETEK (admin és terapeuta egyaránt használja)
    ========================================================= */
+/* =========================================================
+   ADMIN: SZÜLŐK (gyermek hozzáadása a szülő helyett)
+   ========================================================= */
+function viewAdminParents(user){
+  const parents = db.users.filter(u=>u.role==='parent');
+  const rows = parents.map(p=>{
+    const childList = p.children.map(c=>c.name).join(', ') || '<span class="muted">nincs rögzített gyermek</span>';
+    return `<tr><td>${p.name}</td><td>${p.phone||'—'}</td><td>${childList}</td><td><button class="btn btn-ghost btn-sm" data-add-child-for="${p.id}">+ Gyermek hozzáadása</button></td></tr>`;
+  }).join('') || '<tr><td colspan="4" class="muted">Nincs regisztrált szülő.</td></tr>';
+  return `<div class="card">
+    <h3 class="section-title">Szülők</h3>
+    <p class="muted" style="margin-bottom:16px;">Itt tudsz gyermeket felvenni egy szülő fiókjához, ha ő maga nem tudná megtenni (pl. telefonos regisztrációnál).</p>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Szülő</th><th>Telefon</th><th>Gyermekei</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+  </div>`;
+}
+
+function openAddChildForParentModal(parentId){
+  const parent = userOf(parentId);
+  openModal(`
+    <button class="modal-close" data-close>&times;</button>
+    <h3>Gyermek hozzáadása — ${parent.name}</h3>
+    <form id="adminAddChildForm" style="margin-top:16px;">
+      <div class="field"><label for="acName">Gyermek neve</label><input type="text" id="acName" required></div>
+      <div class="field"><label for="acBirth">Születési dátum</label><input type="date" id="acBirth" required></div>
+      <button type="submit" class="btn btn-primary btn-block">Hozzáadás</button>
+    </form>
+  `);
+  document.getElementById('adminAddChildForm').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const { error } = await sb.from('children').insert({
+      parent_id: parentId,
+      name: document.getElementById('acName').value.trim(),
+      birth_date: document.getElementById('acBirth').value,
+    });
+    if(error){ toast('Hiba: ' + error.message); return; }
+    closeModal(); toast('Gyermek hozzáadva.'); await refreshDB(); boot();
+  });
+}
+
 function viewAdminPackages(user){
   const parents = db.users.filter(u=>u.role==='parent');
   const parentOpts = parents.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
-  const rows = db.packages.map(p=>`<tr><td>${userOf(p.userId)?.name||'—'}</td><td>${p.type} alkalmas</td><td>${p.remaining} maradt</td><td>${fmtDate(p.purchasedAt)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Nincs kiosztott bérlet.</td></tr>';
+  const typeOpts = Array.from({length:12},(_,i)=>i+1).map(n=>`<option value="${n}" ${n===4?'selected':''}>${n} alkalmas</option>`).join('');
+  const weekOpts = Array.from({length:10},(_,i)=>i+1).map(n=>`<option value="${n}" ${n===8?'selected':''}>${n} hét</option>`).join('');
+  const now = new Date();
+  const rows = db.packages.map(p=>{
+    const expired = p.expiresAt && new Date(p.expiresAt) <= now;
+    const statusLabel = expired ? '<span class="status-badge status-cancelled">Lejárt</span>' : '<span class="status-badge status-confirmed">Aktív</span>';
+    return `<tr><td>${userOf(p.userId)?.name||'—'}</td><td>${p.type} alkalmas</td><td>${p.remaining} maradt</td><td>${fmtDate(p.purchasedAt)}</td><td>${p.expiresAt?fmtDate(p.expiresAt):'—'}</td><td>${statusLabel}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="muted">Nincs kiosztott bérlet.</td></tr>';
   return `<div class="grid-2">
     <div class="card"><h3 class="section-title">Bérlet hozzáadása szülőhöz</h3>
       <form id="addPackageForm">
         <div class="field"><label for="pkgParent">Szülő</label><select id="pkgParent" required>${parentOpts}</select></div>
-        <div class="field"><label for="pkgType">Bérlet típusa</label><select id="pkgType" required><option value="4">4 alkalmas</option><option value="8">8 alkalmas</option></select></div>
+        <div class="field"><label for="pkgType">Hány alkalmas</label><select id="pkgType" required>${typeOpts}</select></div>
+        <div class="field"><label for="pkgWeeks">Érvényesség (hét)</label><select id="pkgWeeks" required>${weekOpts}</select></div>
+        <p class="muted" style="margin-bottom:14px;">A bérlet a kiosztástól számított ennyi hét múlva lejár, utána nem használható fel belőle alkalom.</p>
         <button type="submit" class="btn btn-primary btn-block">Hozzáadás</button>
       </form>
     </div>
-    <div class="card"><h3 class="section-title">Kiosztott bérletek</h3><table><thead><tr><th>Szülő</th><th>Típus</th><th>Egyenleg</th><th>Dátum</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="card"><h3 class="section-title">Kiosztott bérletek</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő</th><th>Típus</th><th>Egyenleg</th><th>Kiosztás dátuma</th><th>Lejárat</th><th>Állapot</th></tr></thead><tbody>${rows}</tbody></table></div></div>
   </div>`;
 }
 
@@ -1111,7 +1265,8 @@ function openRoomModal(mode, roomId){
     <h3>${isEdit?'Helyiség szerkesztése':'Új helyiség felvétele'}</h3>
     <form id="roomForm" style="margin-top:16px;">
       <div class="field"><label for="roomName">Név</label><input type="text" id="roomName" value="${isEdit?r.name:''}" required></div>
-      <div class="field"><label for="roomCapacity">Kapacitás (max fő / alkalom)</label><input type="number" id="roomCapacity" min="1" value="${isEdit?r.capacity:1}" required></div>
+      <div class="field"><label for="roomCapacity">Kapacitás (max fő / alkalom)</label><input type="number" id="roomCapacity" min="1" max="5" value="${isEdit?r.capacity:1}" required></div>
+      <div class="checkbox-row"><input type="checkbox" id="roomExtraSpot" ${(isEdit && r.capacity>5)?'checked':''}><label for="roomExtraSpot">Admin: +1 extra hely engedélyezése (6 fő csoportos óránál — az alapértelmezett max 5)</label></div>
       <div class="field"><label for="roomColor">Szín (naptár színkód)</label><input type="color" id="roomColor" value="${isEdit?toHex(r.color):'#1E8F76'}" required></div>
       <div class="field"><label for="roomRentalFee">Bérleti díj — egyéni alkalom (Ft)</label><input type="number" id="roomRentalFee" min="0" step="500" value="${isEdit?(r.rentalFee||0):0}" required></div>
       <div class="field"><label for="roomRentalFeeGroup">Bérleti díj — csoportos alkalom (Ft)</label><input type="number" id="roomRentalFeeGroup" min="0" step="500" value="${isEdit?(r.rentalFeeGroup||0):0}"></div>
@@ -1120,10 +1275,20 @@ function openRoomModal(mode, roomId){
       <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">${isEdit?'Mentés':'Felvétel'}</button>
     </form>
   `);
+  const capacityInput = document.getElementById('roomCapacity');
+  const extraSpotCheck = document.getElementById('roomExtraSpot');
+  extraSpotCheck.addEventListener('change', ()=>{
+    capacityInput.max = extraSpotCheck.checked ? '6' : '5';
+    if(!extraSpotCheck.checked && parseInt(capacityInput.value,10) > 5) capacityInput.value = 5;
+  });
+  capacityInput.max = extraSpotCheck.checked ? '6' : '5';
   document.getElementById('roomForm').addEventListener('submit', async (e)=>{
     e.preventDefault();
     const name = document.getElementById('roomName').value.trim();
-    const capacity = parseInt(document.getElementById('roomCapacity').value,10);
+    let capacity = parseInt(document.getElementById('roomCapacity').value,10);
+    const extraSpot = document.getElementById('roomExtraSpot').checked;
+    const capMax = extraSpot ? 6 : 5;
+    if(capacity > capMax){ toast('A kapacitás legfeljebb ' + capMax + ' fő lehet, hacsak nincs bepipálva az extra hely.'); return; }
     const color = document.getElementById('roomColor').value;
     const rentalFee = parseInt(document.getElementById('roomRentalFee').value,10);
     const rentalFeeGroup = parseInt(document.getElementById('roomRentalFeeGroup').value,10) || 0;
@@ -1158,7 +1323,7 @@ function viewAdminServices(user){
   const rows = db.serviceTypes.map(s=>{
     const ther = s.therapistId ? therapistOf(s.therapistId) : null;
     return `<tr>
-    <td>${s.name}${s.isAssessment?' <span class="pill">Felmérés</span>':''}</td><td>${ther ? ther.name : '<span class="muted">— központi —</span>'}</td><td>${fmtHUF(s.price)}</td><td>${s.packageEligible?'Igen':'Nem'}</td><td>${s.adminOnly?'Igen':'Nem'}</td>
+    <td>${s.name}</td><td>${ther ? ther.name : '<span class="muted">— központi —</span>'}</td><td>${fmtHUF(s.price)}</td><td>${s.packageEligible?'Igen':'Nem'}</td><td>${s.adminOnly?'Igen':'Nem'}</td>
     <td style="white-space:nowrap;"><button class="btn btn-ghost btn-sm" data-edit-service="${s.id}">Szerkesztés</button> <button class="btn btn-danger btn-sm" data-delete-service="${s.id}">Törlés</button></td>
   </tr>`;
   }).join('') || '<tr><td colspan="6" class="muted">Nincs felvett szolgáltatás.</td></tr>';
@@ -1167,9 +1332,8 @@ function viewAdminServices(user){
       <h3 class="section-title" style="margin:0;">Szolgáltatások & árak</h3>
       <button class="btn btn-primary btn-sm" data-add-service>+ Új szolgáltatás</button>
     </div>
-    <p class="muted" style="margin-bottom:16px;">A "Felmérés" jelölésű szolgáltatásokra bárki foglalhat első alkalommal is — a többi csak azután nyílik meg egy gyermeknek, hogy volt már felmérése.</p>
+    <p class="muted" style="margin-bottom:16px;">Egy terapeutát csak akkor tudsz kiválasztani egy szolgáltatáshoz, ha már felvetted a "Terapeuták" fülön.</p>
     <div style="overflow-x:auto;"><table><thead><tr><th>Szolgáltatás</th><th>Terapeuta</th><th>Ár</th><th>Bérlettel igénybe vehető</th><th>Csak admin hirdetheti</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-    <p class="muted" style="margin-top:16px;">Egy terapeutát csak akkor tudsz kiválasztani egy szolgáltatáshoz, ha már felvetted a "Terapeuták" fülön.</p>
   </div>`;
 }
 
@@ -1186,7 +1350,6 @@ function openServiceModal(mode, serviceId){
       <div class="field"><label for="svcPrice">Ár (Ft)</label><input type="number" id="svcPrice" min="0" step="500" value="${isEdit?s.price:5000}" required></div>
       <div class="checkbox-row"><input type="checkbox" id="svcPackageEligible" ${(!isEdit || s.packageEligible) ? 'checked' : ''}><label for="svcPackageEligible">Igénybe vehető bérlettel (4-es / 8-as)</label></div>
       <div class="checkbox-row"><input type="checkbox" id="svcAdminOnly" ${(isEdit && s.adminOnly) ? 'checked' : ''}><label for="svcAdminOnly">Csak admin hirdetheti meg (terapeuta fiókból nem választható, pl. Masszázs)</label></div>
-      <div class="checkbox-row"><input type="checkbox" id="svcIsAssessment" ${(isEdit && s.isAssessment) ? 'checked' : ''}><label for="svcIsAssessment">Ez felmérés / vizsgálat típusú — csak erre foglalhat egy gyermek első alkalommal, utána nyílnak meg a többi foglalkozások</label></div>
       <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">${isEdit?'Mentés':'Felvétel'}</button>
     </form>
   `);
@@ -1196,9 +1359,8 @@ function openServiceModal(mode, serviceId){
     const price = parseInt(document.getElementById('svcPrice').value,10);
     const packageEligible = document.getElementById('svcPackageEligible').checked;
     const adminOnly = document.getElementById('svcAdminOnly').checked;
-    const isAssessment = document.getElementById('svcIsAssessment').checked;
     const therapistId = document.getElementById('svcTherapist').value || null;
-    const payload = { name, price, package_eligible: packageEligible, admin_only: adminOnly, therapist_id: therapistId, is_assessment: isAssessment };
+    const payload = { name, price, package_eligible: packageEligible, admin_only: adminOnly, therapist_id: therapistId };
     const { error } = isEdit
       ? await sb.from('service_types').update(payload).eq('id', serviceId)
       : await sb.from('service_types').insert(payload);
@@ -1286,6 +1448,12 @@ function attachViewHandlers(user, tab){
       toast('Időpont törölve.'); await refreshDB(); boot();
     });
   });
+  root.querySelectorAll('[data-admin-book-slot]').forEach(btn=>{
+    btn.addEventListener('click', ()=> openAdminBookModal(btn.dataset.adminBookSlot));
+  });
+  root.querySelectorAll('[data-add-child-for]').forEach(btn=>{
+    btn.addEventListener('click', ()=> openAddChildForParentModal(btn.dataset.addChildFor));
+  });
   root.querySelectorAll('[data-mark-paid]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       const { error } = await sb.from('bookings').update({ status:'confirmed' }).eq('id', btn.dataset.markPaid);
@@ -1317,6 +1485,32 @@ function attachViewHandlers(user, tab){
     toast('Számlázz.hu kulcs elmentve.'); await refreshDB(); boot();
   });
 
+  const displayNameForm = document.getElementById('displayNameForm');
+  if(displayNameForm) displayNameForm.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const displayName = document.getElementById('displayNameInput').value.trim();
+    const { error } = await sb.from('therapist_details').upsert({ id: user.id, display_name: displayName });
+    if(error){ toast('Hiba: ' + error.message); return; }
+    toast('Megjelenítési név mentve.'); await refreshDB(); boot();
+  });
+
+  const assignServiceForm = document.getElementById('assignServiceForm');
+  if(assignServiceForm) assignServiceForm.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const parentId = document.getElementById('assignParent').value;
+    const serviceTypeId = document.getElementById('assignService').value;
+    const { error } = await sb.from('assigned_services').insert({ parent_id: parentId, service_type_id: serviceTypeId, therapist_id: user.id });
+    if(error){ toast('Hiba: ' + (error.message.includes('duplicate') ? 'Ez már hozzá van rendelve ehhez a szülőhöz.' : error.message)); return; }
+    toast('Szolgáltatás hozzárendelve.'); await refreshDB(); boot();
+  });
+  root.querySelectorAll('[data-remove-assignment]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const { error } = await sb.from('assigned_services').delete().eq('id', btn.dataset.removeAssignment);
+      if(error){ toast('Hiba: ' + error.message); return; }
+      toast('Hozzárendelés eltávolítva.'); await refreshDB(); boot();
+    });
+  });
+
   const addServiceTherapistForm = document.getElementById('addServiceTherapistForm');
   if(addServiceTherapistForm) addServiceTherapistForm.addEventListener('submit', async (e)=>{
     e.preventDefault();
@@ -1326,7 +1520,6 @@ function attachViewHandlers(user, tab){
       package_eligible: document.getElementById('tSvcPackageEligible').checked,
       admin_only: false,
       therapist_id: user.id,
-      is_assessment: document.getElementById('tSvcIsAssessment').checked,
     });
     if(error){ toast('Hiba: ' + error.message); return; }
     toast('Foglalkozás típus felvéve — most már választható az óra kiírásánál.'); await refreshDB(); boot();
@@ -1375,8 +1568,10 @@ function attachViewHandlers(user, tab){
   if(addPackageForm) addPackageForm.addEventListener('submit', async (e)=>{
     e.preventDefault();
     const type = parseInt(document.getElementById('pkgType').value,10);
+    const weeks = parseInt(document.getElementById('pkgWeeks').value,10);
+    const expiresAt = new Date(Date.now() + weeks*7*24*60*60*1000).toISOString();
     const { error } = await sb.from('packages').insert({
-      user_id: document.getElementById('pkgParent').value, type, remaining: type,
+      user_id: document.getElementById('pkgParent').value, type, remaining: type, expires_at: expiresAt,
     });
     if(error){ toast('Hiba: ' + error.message); return; }
     toast('Bérlet hozzáadva.'); await refreshDB(); boot();
@@ -1411,6 +1606,7 @@ document.addEventListener('click', (e)=>{
   if(e.target.id==='confirmBooking') { confirmBooking(user, e.target.dataset.slot); return; }
   if(e.target.id==='confirmWaitlist') { confirmWaitlist(user, e.target.dataset.slot); return; }
   if(e.target.id==='doCancelBtn') { doCancel(user, e.target.dataset.booking); return; }
+  if(e.target.id==='confirmAdminBooking') { confirmAdminBooking(e.target.dataset.slot, e.target.dataset.parent); return; }
 });
 
 /* =========================================================
