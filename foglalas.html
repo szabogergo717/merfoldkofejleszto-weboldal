@@ -360,6 +360,12 @@ function therapistDisplayName(ther){
   if(!ther) return 'Nincs terapeuta';
   return ther.displayName || ther.name.split(' ').pop();
 }
+/* Legördülő opciók a sorozat-kiíráshoz: 1 = csak ez az egy alkalom, 2-12 = heti ismétlődés. */
+function recurCountOptions(){
+  let opts = '<option value="1" selected>Csak ez az egy alkalom</option>';
+  for(let n=2; n<=12; n++){ opts += `<option value="${n}">${n} alkalom (heti ismétlődéssel)</option>`; }
+  return opts;
+}
 function userOf(id){ return db.users.find(u=>u.id===id); }
 /* Aktív bérlet keresése egy szülő+gyermek párhoz — előnyben részesíti a
    kifejezetten ahhoz a gyermekhez rendelt bérletet, de elfogadja az
@@ -961,6 +967,7 @@ function viewTherapistAnnounce(user){
   const roomOpts = db.rooms.filter(r=>r.needsTherapist).map(r=>`<option value="${r.id}">${r.name} (max ${r.capacity} fő)</option>`).join('');
   const serviceOpts = ownServices.map(s=>`<option value="${s.id}">${s.name} — ${fmtHUF(s.price)}</option>`).join('')
     || '<option value="" disabled selected>Előbb vegyél fel egy saját foglalkozást lent</option>';
+  const recurOpts = recurCountOptions();
   const ownServiceRows = ownServices.map(s=>`<div class="slot-item" style="margin-bottom:10px;">
       <div class="slot-info"><h4>${s.name}</h4><div class="slot-meta"><span>💳 ${fmtHUF(s.price)}</span><span>${s.packageEligible?'Bérlettel is':'Csak alkalmanként'}</span></div></div>
       <button class="btn btn-ghost btn-sm" data-edit-own-service="${s.id}">Szerkesztés</button>
@@ -983,6 +990,7 @@ function viewTherapistAnnounce(user){
         <div class="field"><label for="slotDuration">Időtartam (perc)</label><input type="number" id="slotDuration" value="45" min="10" required></div>
         <div class="field"><label for="slotRoom">Helyszín</label><select id="slotRoom" required>${roomOpts}</select></div>
         <div class="field"><label for="slotService">Foglalkozás típusa</label><select id="slotService" required>${serviceOpts}</select></div>
+        <div class="field"><label for="slotRecurCount">Hányszor (heti ismétlődéssel)</label><select id="slotRecurCount">${recurOpts}</select></div>
         <p class="muted" style="margin-bottom:14px;">A Masszázsfotel és a Masszázs szolgáltatás nem választható terapeuta fiókból — azokat az admin hirdeti meg.</p>
         <button type="submit" class="btn btn-primary btn-block" ${ownServices.length===0?'disabled':''}>Meghirdetés</button>
       </form>
@@ -1084,6 +1092,7 @@ function viewAdminCalendar(user){
         <div class="field"><label for="slotRoom">Helyszín</label><select id="slotRoom" required>${roomOpts}</select></div>
         <div class="field"><label for="slotTherapist">Terapeuta</label><select id="slotTherapist">${therOpts}</select></div>
         <div class="field"><label for="slotService">Foglalkozás típusa</label><select id="slotService" required>${serviceOpts}</select></div>
+        <div class="field"><label for="slotRecurCount">Hányszor (heti ismétlődéssel)</label><select id="slotRecurCount">${recurCountOptions()}</select></div>
         <button type="submit" class="btn btn-primary btn-block">Meghirdetés</button>
       </form>
     </div>
@@ -1610,14 +1619,22 @@ function attachViewHandlers(user, tab){
     } else {
       therapistId = document.getElementById('slotTherapist').value || null;
     }
-    const { error } = await sb.from('slots').insert({
-      date: new Date(document.getElementById('slotDate').value).toISOString(),
-      duration: parseInt(document.getElementById('slotDuration').value,10),
-      room_id: roomId, therapist_id: therapistId, service_type_id: serviceTypeId,
-      capacity: room.capacity,
-    });
+    const startDate = new Date(document.getElementById('slotDate').value);
+    const duration = parseInt(document.getElementById('slotDuration').value,10);
+    const recurCount = parseInt(document.getElementById('slotRecurCount')?.value || '1', 10);
+    const newSlots = [];
+    for(let i=0; i<recurCount; i++){
+      const d = new Date(startDate.getTime() + i*7*24*60*60*1000);
+      newSlots.push({
+        date: d.toISOString(), duration,
+        room_id: roomId, therapist_id: therapistId, service_type_id: serviceTypeId,
+        capacity: room.capacity,
+      });
+    }
+    const { error } = await sb.from('slots').insert(newSlots);
     if(error){ toast('Hiba: ' + error.message); return; }
-    toast('Időpont meghirdetve.'); await refreshDB(); boot();
+    toast(recurCount>1 ? `${recurCount} időpont meghirdetve (heti ismétlődéssel).` : 'Időpont meghirdetve.');
+    await refreshDB(); boot();
   });
 
   const addPackageForm = document.getElementById('addPackageForm');

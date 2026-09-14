@@ -363,6 +363,27 @@ section{padding:96px 0;}
   letter-spacing:0.06em;text-transform:uppercase;color:var(--gold-deep);
 }
 
+/* ---------- Szülői pihenés / masszázs promóció ---------- */
+.relax-card{
+  background:var(--teal-deep);
+  border-radius:var(--radius-lg);
+  padding:56px;
+  display:grid;
+  grid-template-columns:1.1fr 0.9fr;
+  gap:48px;
+  align-items:center;
+  box-shadow:var(--shadow-lg);
+}
+.relax-text h2{color:var(--white);margin-top:14px;font-size:clamp(1.8rem,3vw,2.4rem);}
+.relax-text em{font-style:italic;color:var(--gold);}
+.relax-text p{color:rgba(255,255,255,0.82);font-size:1.02rem;}
+.relax-image{border-radius:var(--radius-md);overflow:hidden;box-shadow:var(--shadow-md);}
+.relax-image img{width:100%;height:100%;object-fit:cover;display:block;}
+@media (max-width:860px){
+  .relax-card{grid-template-columns:1fr;padding:36px 28px;}
+  .relax-image{order:-1;max-height:320px;}
+}
+
 /* ---------- Testimonial ---------- */
 .testimonial{
   max-width:760px;margin:0 auto;text-align:center;
@@ -894,6 +915,24 @@ footer h5{color:var(--white);font-family:var(--ff-body);font-size:0.85rem;letter
         <span class="tag">Testtudatosság</span>
       </div>
 
+    </div>
+  </div>
+</section>
+
+<!-- MASSZÁZS PROMÓCIÓ -->
+<section id="szulo-pihenes">
+  <div class="container">
+    <div class="relax-card">
+      <div class="relax-text">
+        <span class="eyebrow" style="color:var(--gold);">Neked is jár egy kis pihenés</span>
+        <h2>Amíg Ő tornázik,<br><em>Te felfrissülsz.</em></h2>
+        <p>Amíg a gyermeked a foglalkozáson ügyeskedik, neked sem kell feszülten üldögélned a folyosón. Ülj be masszázsfotelünkbe, és lazíts pár percet — amíg ő fejlődik, te feltöltődsz.</p>
+        <p style="margin-top:10px;">Jelentkezz az időpontfoglaló rendszerünkön keresztül a <strong>Masszázs</strong> szolgáltatásunkra, és foglaljátok le együtt: az ő óráját és a te pihenésedet is.</p>
+        <a href="foglalas.html" class="btn btn-light" style="margin-top:26px;">Masszázsidőpontot foglalok →</a>
+      </div>
+      <div class="relax-image">
+        <img src="images/masszazsfotel.jpg" alt="Kényelmes masszázsfotel a szülőknek, amíg a gyermek foglalkozáson vesz részt">
+      </div>
     </div>
   </div>
 </section>
