@@ -21,7 +21,8 @@
   --room-nagy:#1E8F76; --room-kis:#EF8E58; --room-massz:#C9950F;
 }
 *,*::before,*::after{box-sizing:border-box;}
-body{margin:0;font-family:var(--ff-body);color:var(--ink);background:var(--mint-bg);line-height:1.55;-webkit-font-smoothing:antialiased;}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%;}
+body{margin:0;font-family:var(--ff-body);color:var(--ink);background:var(--mint-bg);line-height:1.55;-webkit-font-smoothing:antialiased;overflow-x:hidden;-webkit-tap-highlight-color:transparent;}
 h1,h2,h3,h4{font-family:var(--ff-display);margin:0;color:var(--teal-deep);font-weight:600;letter-spacing:-0.01em;}
 p{margin:0;}
 a{color:inherit;}
@@ -79,9 +80,10 @@ main{padding:36px 0 80px;}
 .auth-toggle button.active{background:var(--teal-deep);color:#fff;}
 .field{display:flex;flex-direction:column;gap:6px;margin-bottom:16px;}
 .field label{font-size:0.84rem;font-weight:700;color:var(--teal-deep);}
-.field input,.field select,.field textarea{font-family:var(--ff-body);font-size:0.95rem;padding:12px 14px;border-radius:var(--radius-sm);border:1.5px solid var(--line);background:var(--paper);color:var(--ink);}
+.field input,.field select,.field textarea{font-family:var(--ff-body);font-size:16px;padding:12px 14px;border-radius:var(--radius-sm);border:1.5px solid var(--line);background:var(--paper);color:var(--ink);width:100%;}
 .field input:focus,.field select:focus,.field textarea:focus{border-color:var(--teal);outline:none;background:#fff;}
 .field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}
 .demo-accounts{margin-top:18px;font-size:0.78rem;color:var(--ink-soft);background:var(--mint-bg);padding:12px 14px;border-radius:var(--radius-sm);}
 .form-error{background:var(--danger-bg);color:var(--danger);padding:10px 14px;border-radius:var(--radius-sm);font-size:0.86rem;font-weight:600;margin-bottom:14px;display:none;}
 
@@ -150,6 +152,38 @@ tr:last-child td{border-bottom:none;}
 footer.app-footer{text-align:center;padding:30px 0;color:var(--ink-soft);font-size:0.8rem;}
 .toast{position:fixed;bottom:24px;right:24px;background:var(--teal-deep);color:#fff;padding:14px 20px;border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);font-size:0.88rem;font-weight:600;z-index:300;opacity:0;transform:translateY(10px);transition:opacity .25s ease, transform .25s ease;max-width:320px;}
 .toast.show{opacity:1;transform:translateY(0);}
+
+/* ---------- Mobil / reszponzív ---------- */
+@media (max-width:720px){
+  .field-row,.form-row{grid-template-columns:1fr;gap:0;}
+  .topbar-inner{padding:12px 16px;flex-wrap:wrap;gap:8px;}
+  .brand strong{font-size:0.92rem;}
+  .brand img{width:34px;height:34px;}
+  .topbar-actions{gap:8px;flex-wrap:wrap;justify-content:flex-end;}
+  .role-badge{font-size:0.68rem;padding:5px 10px;}
+  .tabs{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:6px;margin:0 -16px 24px;padding-left:16px;padding-right:16px;}
+  .tabs::-webkit-scrollbar{height:4px;}
+  .tab{flex:none;white-space:nowrap;}
+  .container{padding:0 16px;}
+  main{padding:24px 0 60px;}
+  .card{padding:18px;}
+  .modal{padding:24px;max-width:calc(100% - 24px);margin:12px;max-height:calc(100vh - 24px);}
+  .cal-grid{-webkit-overflow-scrolling:touch;}
+  table{font-size:0.82rem;}
+  th,td{padding:9px 6px;}
+  .btn-block{white-space:normal;}
+  .pay-option strong,.pay-option span{overflow-wrap:break-word;}
+  .status-badge,.pill{white-space:nowrap;}
+  .slot-item{flex-wrap:wrap;}
+  .checkbox-row label{overflow-wrap:break-word;}
+}
+@media (max-width:420px){
+  .brand strong{display:none;}
+  .demo-banner{font-size:0.76rem;padding:8px 10px;}
+  .auth-card{padding:26px 20px;}
+  .card{padding:14px;}
+  h3.section-title{font-size:1.02rem;}
+}
 </style>
 </head>
 <body>
@@ -881,7 +915,7 @@ async function doCancel(user, bookingId){
 function viewChildren(user){
   const rows = user.children.map(c=>`<tr><td>${c.name}</td><td>${c.birthDate||'—'}</td></tr>`).join('') || '<tr><td colspan="2" class="muted">Még nincs rögzített gyermek.</td></tr>';
   return `<div class="grid-2">
-    <div class="card"><h3 class="section-title">Gyermekeim</h3><table><thead><tr><th>Név</th><th>Születési dátum</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="card"><h3 class="section-title">Gyermekeim</h3><div style="overflow-x:auto;"><table><thead><tr><th>Név</th><th>Születési dátum</th></tr></thead><tbody>${rows}</tbody></table></div></div>
     <div class="card"><h3 class="section-title">Új gyermek hozzáadása</h3>
       <form id="addChildForm">
         <div class="field"><label for="childName">Gyermek neve</label><input type="text" id="childName" required></div>
@@ -904,7 +938,7 @@ function viewPackages(user){
     const child = p.childId ? user.children.find(c=>c.id===p.childId) : null;
     return `<tr><td>${child?child.name:'<span class="muted">bármelyik gyermek</span>'}</td><td>${p.type} alkalmas bérlet</td><td>${p.remaining} alkalom maradt</td><td>${fmtDate(p.purchasedAt)}</td><td>${p.expiresAt?fmtDate(p.expiresAt):'—'}</td><td>${statusLabel}</td></tr>`;
   }).join('') || '<tr><td colspan="6" class="muted">Nincs aktív bérleted.</td></tr>';
-  return `<div class="card"><h3 class="section-title">Bérleteim</h3><table><thead><tr><th>Gyermek</th><th>Típus</th><th>Egyenleg</th><th>Vásárlás dátuma</th><th>Lejárat</th><th>Állapot</th></tr></thead><tbody>${rows}</tbody></table>
+  return `<div class="card"><h3 class="section-title">Bérleteim</h3><div style="overflow-x:auto;"><table><thead><tr><th>Gyermek</th><th>Típus</th><th>Egyenleg</th><th>Vásárlás dátuma</th><th>Lejárat</th><th>Állapot</th></tr></thead><tbody>${rows}</tbody></table></div>
   <p class="muted" style="margin-top:16px;">Új bérlet vásárlásához keresd az adminisztrátort vagy a terapeutát — mindketten fel tudják venni neked a rendszerben.</p></div>`;
 }
 

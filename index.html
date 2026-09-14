@@ -76,7 +76,8 @@
   --ff-body:'Plus Jakarta Sans', sans-serif;
 }
 *,*::before,*::after{box-sizing:border-box;}
-html{scroll-behavior:smooth;}
+html{scroll-behavior:smooth;overflow-x:hidden;-webkit-text-size-adjust:100%;text-size-adjust:100%;}
+body{overflow-x:hidden;-webkit-tap-highlight-color:transparent;}
 @media (prefers-reduced-motion: reduce){
   html{scroll-behavior:auto;}
   *,*::before,*::after{animation-duration:0.001ms !important; animation-iteration-count:1 !important; transition-duration:0.001ms !important; scroll-behavior:auto !important;}
@@ -146,6 +147,7 @@ p{margin:0;}
 header{
   position:sticky;top:0;z-index:100;
   background:rgba(252,251,248,0.85);
+  -webkit-backdrop-filter:blur(10px);
   backdrop-filter:blur(10px);
   border-bottom:1px solid transparent;
   transition:border-color 0.3s ease, box-shadow 0.3s ease;
@@ -394,12 +396,13 @@ section{padding:96px 0;}
 .field .hint{font-size:0.76rem;color:var(--ink-soft);font-weight:500;}
 .field input,.field select,.field textarea{
   font-family:var(--ff-body);
-  font-size:0.96rem;
+  font-size:16px;
   padding:13px 15px;
   border-radius:var(--radius-sm);
   border:1.5px solid var(--line);
   background:var(--paper);
   color:var(--ink);
+  width:100%;
   transition:border-color 0.2s ease, background 0.2s ease;
 }
 .field input:focus,.field select:focus,.field textarea:focus{
@@ -511,6 +514,7 @@ footer h5{color:var(--white);font-family:var(--ff-body);font-size:0.85rem;letter
     padding:22px 24px;gap:18px;
     transform:translateY(-14px);opacity:0;pointer-events:none;
     transition:transform 0.25s ease, opacity 0.25s ease;
+    max-height:calc(100vh - 90px);overflow-y:auto;
   }
   nav.main-nav.open{transform:translateY(0);opacity:1;pointer-events:auto;}
   .nav-toggle{display:block;}
@@ -519,6 +523,25 @@ footer h5{color:var(--white);font-family:var(--ff-body);font-size:0.85rem;letter
   .pay-options{grid-template-columns:1fr;}
   .footer-grid{grid-template-columns:1fr;}
   section{padding:64px 0;}
+  .hero-cta{flex-direction:column;align-items:stretch;}
+  .hero-cta .btn{width:100%;}
+  .trust-item,.contact-item,.team-card,.service-card,.faq-question{overflow-wrap:break-word;word-break:break-word;}
+}
+@media (max-width:480px){
+  .container{padding:0 16px;}
+  .nav-wrap{padding:12px 16px;}
+  .brand img{width:38px;height:38px;}
+  .brand-name{font-size:0.92rem;}
+  .brand-name span{display:none;}
+  .header-actions{gap:8px;}
+  .header-actions .btn-primary{padding:10px 16px;font-size:0.86rem;}
+  section{padding:48px 0;}
+  .hero-trust{gap:18px;}
+  .trust-item strong{font-size:1.35rem;}
+  .footer-bottom{flex-direction:column;align-items:flex-start;gap:6px;}
+  .team-quals{gap:6px;}
+  .team-qual-tag,.team-role{font-size:0.8rem;padding:5px 11px;}
+}
 }
 
 /* ---------- Segítség / irányított kérdéssor ---------- */
