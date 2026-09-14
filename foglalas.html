@@ -1224,7 +1224,9 @@ function openAddChildForParentModal(parentId){
 
 function viewAdminPackages(user){
   const parents = db.users.filter(u=>u.role==='parent');
-  const parentOpts = '<option value="" disabled selected>Válassz szülőt…</option>' + parents.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+  const allChildren = [];
+  parents.forEach(p => p.children.forEach(c => allChildren.push({ id:c.id, name:c.name, parentId:p.id, parentName:p.name })));
+  const childOpts = '<option value="" disabled selected>Válassz gyermeket…</option>' + allChildren.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
   const typeOpts = Array.from({length:12},(_,i)=>i+1).map(n=>`<option value="${n}" ${n===4?'selected':''}>${n} alkalmas</option>`).join('');
   const weekOpts = Array.from({length:10},(_,i)=>i+1).map(n=>`<option value="${n}" ${n===8?'selected':''}>${n} hét</option>`).join('');
   const now = new Date();
@@ -1236,14 +1238,14 @@ function viewAdminPackages(user){
     return `<tr><td>${parent?.name||'—'}</td><td>${child?child.name:'<span class="muted">bármelyik gyermek</span>'}</td><td>${p.type} alkalmas</td><td>${p.remaining} maradt</td><td>${fmtDate(p.purchasedAt)}</td><td>${p.expiresAt?fmtDate(p.expiresAt):'—'}</td><td>${statusLabel}</td></tr>`;
   }).join('') || '<tr><td colspan="7" class="muted">Nincs kiosztott bérlet.</td></tr>';
   return `<div class="grid-2">
-    <div class="card"><h3 class="section-title">Bérlet hozzáadása szülőhöz</h3>
+    <div class="card"><h3 class="section-title">Bérlet hozzáadása</h3>
       <form id="addPackageForm">
-        <div class="field"><label for="pkgParent">Szülő</label><select id="pkgParent" required>${parentOpts}</select></div>
-        <div id="pkgChildWrap"></div>
+        <div class="field"><label for="pkgChild">Gyermek</label><select id="pkgChild" required>${childOpts}</select></div>
+        <div id="pkgParentWrap"></div>
         <div class="field"><label for="pkgType">Hány alkalmas</label><select id="pkgType" required>${typeOpts}</select></div>
         <div class="field"><label for="pkgWeeks">Érvényesség (hét)</label><select id="pkgWeeks" required>${weekOpts}</select></div>
         <p class="muted" style="margin-bottom:14px;">A bérlet a kiosztástól számított ennyi hét múlva lejár, utána nem használható fel belőle alkalom.</p>
-        <button type="submit" class="btn btn-primary btn-block">Hozzáadás</button>
+        <button type="submit" class="btn btn-primary btn-block" ${allChildren.length===0?'disabled':''}>Hozzáadás</button>
       </form>
     </div>
     <div class="card"><h3 class="section-title">Kiosztott bérletek</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő</th><th>Gyermek</th><th>Típus</th><th>Egyenleg</th><th>Kiosztás dátuma</th><th>Lejárat</th><th>Állapot</th></tr></thead><tbody>${rows}</tbody></table></div></div>
@@ -1638,22 +1640,23 @@ function attachViewHandlers(user, tab){
   });
 
   const addPackageForm = document.getElementById('addPackageForm');
-  const pkgParentSelect = document.getElementById('pkgParent');
-  if(pkgParentSelect) pkgParentSelect.addEventListener('change', (e)=>{
-    const parent = userOf(e.target.value);
-    const wrap = document.getElementById('pkgChildWrap');
-    if(!parent || parent.children.length===0){ wrap.innerHTML = ''; return; }
-    const childOpts = '<option value="">— bármelyik gyermeke —</option>' + parent.children.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
-    wrap.innerHTML = `<div class="field"><label for="pkgChild">Gyermek</label><select id="pkgChild">${childOpts}</select></div>`;
+  const pkgChildSelect = document.getElementById('pkgChild');
+  if(pkgChildSelect) pkgChildSelect.addEventListener('change', (e)=>{
+    const child = findChildAnywhere(e.target.value);
+    const wrap = document.getElementById('pkgParentWrap');
+    if(!child){ wrap.innerHTML = ''; return; }
+    wrap.innerHTML = `<div class="pay-detail-box" style="margin-bottom:16px;"><div><span>Szülő</span><span><strong>${userOf(child.parentId)?.name || '—'}</strong></span></div></div>`;
   });
   if(addPackageForm) addPackageForm.addEventListener('submit', async (e)=>{
     e.preventDefault();
     const type = parseInt(document.getElementById('pkgType').value,10);
     const weeks = parseInt(document.getElementById('pkgWeeks').value,10);
     const expiresAt = new Date(Date.now() + weeks*7*24*60*60*1000).toISOString();
-    const childId = document.getElementById('pkgChild')?.value || null;
+    const childId = document.getElementById('pkgChild').value;
+    const child = findChildAnywhere(childId);
+    if(!child){ toast('Válassz gyermeket.'); return; }
     const { error } = await sb.from('packages').insert({
-      user_id: document.getElementById('pkgParent').value, child_id: childId, type, remaining: type, expires_at: expiresAt,
+      user_id: child.parentId, child_id: childId, type, remaining: type, expires_at: expiresAt,
     });
     if(error){ toast('Hiba: ' + error.message); return; }
     toast('Bérlet hozzáadva.'); await refreshDB(); boot();
