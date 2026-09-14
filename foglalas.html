@@ -99,6 +99,11 @@ main{padding:36px 0 80px;}
 .empty-state{text-align:center;padding:50px 20px;color:var(--ink-soft);}
 
 /* week calendar */
+.room-filter-bar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;}
+.room-filter-pill{display:inline-flex;align-items:center;gap:7px;padding:8px 14px;border-radius:999px;border:1.5px solid var(--line);background:var(--white);font-size:0.84rem;font-weight:700;color:var(--ink-soft);cursor:pointer;font-family:var(--ff-body);}
+.room-filter-pill:hover{border-color:var(--teal);}
+.room-filter-pill.active{border-color:var(--teal);background:var(--mint-bg);color:var(--teal-deep);}
+.room-filter-pill .dot{width:9px;height:9px;border-radius:50%;flex:none;}
 .cal-nav{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;flex-wrap:wrap;}
 .cal-nav strong{font-family:var(--ff-display);color:var(--teal-deep);font-size:1.05rem;}
 .cal-grid{display:grid;grid-template-columns:repeat(7,minmax(160px,1fr));gap:10px;overflow-x:auto;padding-bottom:6px;}
@@ -391,6 +396,21 @@ function weekRangeLabel(monday){
   return f(monday) + ' – ' + f(sunday);
 }
 let calWeekStart = startOfWeek(new Date());
+/* Teremszűrő — üres halmaz = minden terem látszik. Egy- és többszörös
+   kiválasztást is támogat, minden naptár nézetnél (szülő, admin, terapeuta). */
+let roomFilter = new Set();
+function renderRoomFilterBar(){
+  const allActive = roomFilter.size===0;
+  const allPill = `<button type="button" class="room-filter-pill ${allActive?'active':''}" data-room-filter-all>Összes terem</button>`;
+  const roomPills = db.rooms.map(r=>{
+    const active = roomFilter.has(r.id);
+    return `<button type="button" class="room-filter-pill ${active?'active':''}" data-room-filter="${r.id}"><span class="dot" style="background:${r.color}"></span>${r.name}</button>`;
+  }).join('');
+  return `<div class="room-filter-bar">${allPill}${roomPills}</div>`;
+}
+function applyRoomFilter(slots){
+  return roomFilter.size===0 ? slots : slots.filter(s=>roomFilter.has(s.roomId));
+}
 let rentalFilter = { from:'', to:'', therapistId:'', roomId:'' };
 
 /* Egy heti naptárrács renderelése. slots: az adott héten megjelenítendő időpontok.
@@ -635,7 +655,7 @@ function viewBook(user){
   const VISIBILITY_DAYS = 60;
   const today = new Date(); today.setHours(0,0,0,0);
   const maxDate = addDays(today, VISIBILITY_DAYS);
-  const visibleSlots = db.slots.filter(s=> new Date(s.date) <= maxDate);
+  const visibleSlots = applyRoomFilter(db.slots.filter(s=> new Date(s.date) <= maxDate));
   const calendar = renderWeekCalendar(visibleSlots, {
     maxDate,
     hideCount: true,
@@ -647,6 +667,7 @@ function viewBook(user){
   return `<div class="card"><h3 class="section-title">Naptár — foglalj egy szabad időpontra</h3>
     <p class="muted" style="margin-bottom:8px;">A hétre meghirdetett időpontok teremenként csoportosítva. Kattints egy "Foglalás" gombra a részletekhez.</p>
     <p class="muted" style="margin-bottom:18px;font-size:0.82rem;">⏳ A rendszer mindig automatikusan, ${VISIBILITY_DAYS} nappal előre nyitja meg az időpontokat — ez nem kézi beállítás, a naptár magától "gördül" előre nap mint nap.</p>
+    ${renderRoomFilterBar()}
     ${calendar}</div>`;
 }
 
@@ -952,13 +973,13 @@ function viewPackages(user){
    TERAPEUTA: NAPTÁR
    ========================================================= */
 function viewTherapistTeamCalendar(user){
-  const calendar = renderWeekCalendar(db.slots, { ownId:user.id });
-  return `<div class="card"><h3 class="section-title">Teljes csapatnaptár</h3><p class="muted" style="margin-bottom:18px;">Minden kolléga és a Masszázsfotel foglalásai — a sajátjaid kiemelve.</p>${calendar}</div>`;
+  const calendar = renderWeekCalendar(applyRoomFilter(db.slots), { ownId:user.id });
+  return `<div class="card"><h3 class="section-title">Teljes csapatnaptár</h3><p class="muted" style="margin-bottom:18px;">Minden kolléga és a Masszázsfotel foglalásai — a sajátjaid kiemelve.</p>${renderRoomFilterBar()}${calendar}</div>`;
 }
 
 function viewTherapistAnnounce(user){
   const ther = therapistOf(user.id);
-  const ownSlots = db.slots.filter(s=>s.therapistId===user.id);
+  const ownSlots = applyRoomFilter(db.slots.filter(s=>s.therapistId===user.id));
   const calendar = renderWeekCalendar(ownSlots, {
     showTherapist:false,
     actionRenderer: (s) => `<button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
@@ -1007,7 +1028,7 @@ function viewTherapistAnnounce(user){
       </form>
     </div>
   </div>
-    <div class="card"><h3 class="section-title">Saját meghirdetett óráim</h3>${calendar}</div>`;
+    <div class="card"><h3 class="section-title">Saját meghirdetett óráim</h3>${renderRoomFilterBar()}${calendar}</div>`;
 }
 
 function openOwnServiceModal(user, serviceId){
@@ -1080,7 +1101,7 @@ function viewAdminCalendar(user){
     const ther = s.therapistId ? therapistOf(s.therapistId) : null;
     return `<option value="${s.id}">${s.name}${ther ? ' ('+ther.name+')' : ' (központi)'} — ${fmtHUF(s.price)}</option>`;
   }).join('');
-  const calendar = renderWeekCalendar(db.slots, {
+  const calendar = renderWeekCalendar(applyRoomFilter(db.slots), {
     actionRenderer: (s) => `<button class="btn btn-primary btn-sm cal-slot-btn" data-admin-book-slot="${s.id}" style="margin-bottom:4px;">Foglalás felvétele</button><button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
   });
 
@@ -1098,7 +1119,7 @@ function viewAdminCalendar(user){
     </div>
     <div class="card"><h3 class="section-title">Gyors áttekintés</h3><p class="muted">A naptárban minden meghirdetett időpont látszik, teremenként csoportosítva. Bármelyik óra a "Törlés" gombbal visszavonható.</p></div>
   </div>
-  <div class="card"><h3 class="section-title">Naptár</h3>${calendar}</div>`;
+  <div class="card"><h3 class="section-title">Naptár</h3>${renderRoomFilterBar()}${calendar}</div>`;
 }
 
 /* =========================================================
@@ -1666,6 +1687,12 @@ function attachViewHandlers(user, tab){
   root.querySelectorAll('[data-cal-prev]').forEach(btn=>btn.addEventListener('click', ()=>{ calWeekStart = addDays(calWeekStart,-7); boot(); }));
   root.querySelectorAll('[data-cal-next]').forEach(btn=>btn.addEventListener('click', ()=>{ calWeekStart = addDays(calWeekStart,7); boot(); }));
   root.querySelectorAll('[data-cal-today]').forEach(btn=>btn.addEventListener('click', ()=>{ calWeekStart = startOfWeek(new Date()); boot(); }));
+  root.querySelectorAll('[data-room-filter]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const id = btn.dataset.roomFilter;
+    if(roomFilter.has(id)) roomFilter.delete(id); else roomFilter.add(id);
+    boot();
+  }));
+  root.querySelectorAll('[data-room-filter-all]').forEach(btn=>btn.addEventListener('click', ()=>{ roomFilter.clear(); boot(); }));
 
   // admin: terapeuták CRUD
   root.querySelectorAll('[data-add-therapist]').forEach(btn=>btn.addEventListener('click', ()=>openTherapistModal('add')));
