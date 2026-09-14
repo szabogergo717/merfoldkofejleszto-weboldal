@@ -649,29 +649,29 @@ function openAdminBookModal(slotId){
   const s = db.slots.find(x=>x.id===slotId);
   const room = roomOf(s.roomId); const service = serviceOf(s.serviceTypeId); const ther = s.therapistId ? therapistOf(s.therapistId) : null;
   const parents = db.users.filter(u=>u.role==='parent');
-  const parentOpts = '<option value="" disabled selected>Válassz szülőt…</option>' + parents.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+  const allChildren = [];
+  parents.forEach(p => p.children.forEach(c => allChildren.push({ id:c.id, name:c.name, parentId:p.id, parentName:p.name })));
+  const childOpts = '<option value="" disabled selected>Válassz gyermeket…</option>' + allChildren.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
   openModal(`
     <button class="modal-close" data-close>&times;</button>
     <h3>${service.name}</h3>
     <p class="muted">${room.name} · ${fmtDate(s.date)} · ${s.duration} perc ${ther? '· '+ther.name : ''}</p>
     <div class="field" style="margin-top:18px;">
-      <label for="adminBookParent">Szülő</label>
-      <select id="adminBookParent">${parentOpts}</select>
+      <label for="adminBookChild">Gyermek</label>
+      <select id="adminBookChild">${childOpts}</select>
     </div>
     <div id="adminBookRest"></div>
   `);
-  document.getElementById('adminBookParent').addEventListener('change', (e)=>{
-    const parent = parents.find(p=>p.id===e.target.value);
+  if(allChildren.length===0){
+    document.getElementById('adminBookRest').innerHTML = '<p class="muted" style="margin-top:14px;">Még egyetlen szülőnek sincs rögzített gyermeke a rendszerben.</p>';
+  }
+  document.getElementById('adminBookChild').addEventListener('change', (e)=>{
+    const child = allChildren.find(c=>c.id===e.target.value);
     const rest = document.getElementById('adminBookRest');
-    if(!parent || parent.children.length===0){
-      rest.innerHTML = '<p class="muted" style="margin-top:14px;">Ennek a szülőnek még nincs rögzített gyermeke.</p>';
-      return;
-    }
-    const childOpts = parent.children.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
-    const now = new Date();
-    const activePkg = db.packages.find(p=>p.userId===parent.id && p.remaining>0 && (!p.expiresAt || new Date(p.expiresAt)>now));
+    if(!child){ rest.innerHTML=''; return; }
+    const activePkg = findActivePackage(child.parentId, child.id);
     rest.innerHTML = `
-      <div class="field" style="margin-top:14px;"><label for="adminBookChild">Gyermek</label><select id="adminBookChild">${childOpts}</select></div>
+      <div class="pay-detail-box" style="margin-top:14px;"><div><span>Szülő</span><span><strong>${child.parentName}</strong></span></div></div>
       <fieldset style="border:none;padding:0;margin:14px 0 0;">
         <legend style="font-size:0.86rem;font-weight:700;color:var(--teal-deep);margin-bottom:8px;">Fizetés módja</legend>
         <div class="pay-options">
@@ -680,7 +680,7 @@ function openAdminBookModal(slotId){
           <label class="pay-option"><input type="radio" name="adminPayMethod" value="cash"><strong>Készpénz a helyszínen</strong></label>
         </div>
       </fieldset>
-      <button class="btn btn-primary btn-block" style="margin-top:16px;" id="confirmAdminBooking" data-slot="${s.id}" data-parent="${parent.id}">Foglalás rögzítése</button>
+      <button class="btn btn-primary btn-block" style="margin-top:16px;" id="confirmAdminBooking" data-slot="${s.id}" data-parent="${child.parentId}">Foglalás rögzítése</button>
     `;
   });
 }
