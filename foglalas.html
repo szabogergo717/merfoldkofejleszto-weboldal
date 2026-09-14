@@ -1129,14 +1129,65 @@ function viewAdminBookings(user){
 function viewAdminParents(user){
   const parents = db.users.filter(u=>u.role==='parent');
   const rows = parents.map(p=>{
-    const childList = p.children.map(c=>c.name).join(', ') || '<span class="muted">nincs rögzített gyermek</span>';
-    return `<tr><td>${p.name}</td><td>${p.phone||'—'}</td><td>${childList}</td><td><button class="btn btn-ghost btn-sm" data-add-child-for="${p.id}">+ Gyermek hozzáadása</button></td></tr>`;
+    const childRows = p.children.map(c=>`
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
+        <span>${c.name}${c.birthDate?` <span class="muted" style="font-size:0.76rem;">(${c.birthDate})</span>`:''}</span>
+        <span style="white-space:nowrap;">
+          <button class="btn btn-ghost btn-sm" data-edit-child="${c.id}" style="padding:4px 9px;font-size:0.72rem;">Szerkesztés</button>
+          <button class="btn btn-danger btn-sm" data-delete-child="${c.id}" style="padding:4px 9px;font-size:0.72rem;">Törlés</button>
+        </span>
+      </div>`).join('') || '<span class="muted">nincs rögzített gyermek</span>';
+    return `<tr><td>${p.name}</td><td>${p.phone||'—'}</td><td>${childRows}</td><td><button class="btn btn-ghost btn-sm" data-add-child-for="${p.id}">+ Gyermek hozzáadása</button></td></tr>`;
   }).join('') || '<tr><td colspan="4" class="muted">Nincs regisztrált szülő.</td></tr>';
   return `<div class="card">
     <h3 class="section-title">Szülők</h3>
-    <p class="muted" style="margin-bottom:16px;">Itt tudsz gyermeket felvenni egy szülő fiókjához, ha ő maga nem tudná megtenni (pl. telefonos regisztrációnál).</p>
+    <p class="muted" style="margin-bottom:16px;">Itt tudsz gyermeket felvenni, szerkeszteni vagy törölni bármelyik szülő fiókjához, ha ő maga nem tudná megtenni (pl. telefonos regisztrációnál, névelírásnál).</p>
     <div style="overflow-x:auto;"><table><thead><tr><th>Szülő</th><th>Telefon</th><th>Gyermekei</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
   </div>`;
+}
+
+/* Gyermek keresése az összes szülő gyermekei közül, a szülő azonosítójával együtt. */
+function findChildAnywhere(childId){
+  for(const u of db.users){
+    const c = u.children.find(x=>x.id===childId);
+    if(c) return { ...c, parentId: u.id };
+  }
+  return null;
+}
+
+function openEditChildModal(childId){
+  const child = findChildAnywhere(childId);
+  if(!child) return;
+  openModal(`
+    <button class="modal-close" data-close>&times;</button>
+    <h3>Gyermek szerkesztése</h3>
+    <form id="editChildForm" style="margin-top:16px;">
+      <div class="field"><label for="ecName">Gyermek neve</label><input type="text" id="ecName" value="${child.name}" required></div>
+      <div class="field"><label for="ecBirth">Születési dátum</label><input type="date" id="ecBirth" value="${child.birthDate||''}" required></div>
+      <button type="submit" class="btn btn-primary btn-block">Mentés</button>
+    </form>
+  `);
+  document.getElementById('editChildForm').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const { error } = await sb.from('children').update({
+      name: document.getElementById('ecName').value.trim(),
+      birth_date: document.getElementById('ecBirth').value,
+    }).eq('id', childId);
+    if(error){ toast('Hiba: ' + error.message); return; }
+    closeModal(); toast('Gyermek adatai frissítve.'); await refreshDB(); boot();
+  });
+}
+
+async function deleteChild(childId){
+  const hasUpcoming = db.bookings.some(b=>{
+    if(b.childId!==childId || b.status==='cancelled') return false;
+    const slot = db.slots.find(x=>x.id===b.slotId);
+    return slot && new Date(slot.date) > new Date();
+  });
+  if(hasUpcoming){ toast('Ennek a gyermeknek van jövőbeli foglalása — előbb azt mondd le, utána törölhető.'); return; }
+  const { error } = await sb.from('children').delete().eq('id', childId);
+  if(error){ toast('Hiba a törléskor: ' + error.message); return; }
+  toast('Gyermek törölve.'); await refreshDB(); boot();
 }
 
 function openAddChildForParentModal(parentId){
@@ -1469,6 +1520,12 @@ function attachViewHandlers(user, tab){
   });
   root.querySelectorAll('[data-add-child-for]').forEach(btn=>{
     btn.addEventListener('click', ()=> openAddChildForParentModal(btn.dataset.addChildFor));
+  });
+  root.querySelectorAll('[data-edit-child]').forEach(btn=>{
+    btn.addEventListener('click', ()=> openEditChildModal(btn.dataset.editChild));
+  });
+  root.querySelectorAll('[data-delete-child]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ if(confirm('Biztosan törlöd ezt a gyermeket?')) deleteChild(btn.dataset.deleteChild); });
   });
   root.querySelectorAll('[data-mark-paid]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
