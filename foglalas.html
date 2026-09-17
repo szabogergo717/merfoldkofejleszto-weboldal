@@ -749,6 +749,11 @@ function openAdminBookModal(slotId){
             <label class="pay-option"><input type="radio" name="adminPayMethod" value="cash"><strong>Készpénz a helyszínen</strong></label>
           </div>
         </fieldset>
+        ${activePkg && activePkg.remaining>1 ? `<div class="field" style="margin-top:14px;">
+          <label for="adminRecurCount">Sorozatos foglalás bérletből (heti ismétlődéssel)</label>
+          <select id="adminRecurCount">${bookingRecurOptions(activePkg.remaining)}</select>
+          <span class="hint">Csak a "Bérlet felhasználása" fizetési módnál érvényes — a rendszer a következő hetek azonos időpontjaira is lefoglal, amíg a meghirdetett sorozat és a bérlet engedi.</span>
+        </div>` : ''}
         <button class="btn btn-primary btn-block" style="margin-top:16px;" id="confirmAdminBooking" data-slot="${s.id}" data-parent="${parent.id}" data-self="1">Foglalás rögzítése</button>
       `;
     });
@@ -786,12 +791,18 @@ function openAdminBookModal(slotId){
           <label class="pay-option"><input type="radio" name="adminPayMethod" value="cash"><strong>Készpénz a helyszínen</strong></label>
         </div>
       </fieldset>
+      ${activePkg && activePkg.remaining>1 ? `<div class="field" style="margin-top:14px;">
+        <label for="adminRecurCount">Sorozatos foglalás bérletből (heti ismétlődéssel)</label>
+        <select id="adminRecurCount">${bookingRecurOptions(activePkg.remaining)}</select>
+        <span class="hint">Csak a "Bérlet felhasználása" fizetési módnál érvényes — a rendszer a következő hetek azonos időpontjaira is lefoglal, amíg a meghirdetett sorozat és a bérlet engedi.</span>
+      </div>` : ''}
       <button class="btn btn-primary btn-block" style="margin-top:16px;" id="confirmAdminBooking" data-slot="${s.id}" data-parent="${child.parentId}" data-child="${child.id}">Foglalás rögzítése</button>
     `;
   });
 }
 
 async function confirmAdminBooking(slotId, parentId, childId, forSelf){
+  const s = db.slots.find(x=>x.id===slotId);
   const payMethod = document.querySelector('input[name="adminPayMethod"]:checked')?.value;
   let packageUsed = false, pkg = null;
   if(payMethod==='package'){
@@ -799,18 +810,40 @@ async function confirmAdminBooking(slotId, parentId, childId, forSelf){
     if(!pkg){ toast('Nincs elérhető bérlet.'); return; }
     packageUsed = true;
   }
+
+  // Sorozatos foglalás: a kiválasztott alkalomtól heti ismétlődéssel, amíg a
+  // meghirdetett sorozat és a bérlet egyenlege engedi.
+  const recurCount = packageUsed ? parseInt(document.getElementById('adminRecurCount')?.value || '1', 10) : 1;
+  const targets = [s];
+  if(recurCount > 1){
+    for(let i=1; i<recurCount; i++){
+      const targetTime = new Date(s.date).getTime() + i*7*24*60*60*1000;
+      const match = db.slots.find(x=>
+        x.serviceTypeId===s.serviceTypeId && x.roomId===s.roomId && x.therapistId===s.therapistId &&
+        new Date(x.date).getTime() === targetTime
+      );
+      if(match) targets.push(match);
+    }
+  }
+  const alreadyBooked = t => db.bookings.some(b=>b.slotId===t.id && b.status!=='cancelled' && (forSelf ? (b.forSelf && b.parentId===parentId) : b.childId===childId));
+  const isFull = t => t.id!==s.id && t.bookedChildIds.length >= t.capacity;
+  let finalTargets = targets.filter(t => !alreadyBooked(t) && !isFull(t));
+  if(packageUsed) finalTargets = finalTargets.slice(0, pkg.remaining);
+  if(finalTargets.length===0){ toast('Nem sikerült egyetlen időpontot sem lefoglalni (talán már mind foglalt vagy betelt).'); return; }
+
   if(packageUsed){
-    const { error: pkgErr } = await sb.from('packages').update({ remaining: pkg.remaining-1 }).eq('id', pkg.id);
+    const { error: pkgErr } = await sb.from('packages').update({ remaining: pkg.remaining - finalTargets.length }).eq('id', pkg.id);
     if(pkgErr){ toast('Hiba a bérlet frissítésekor: ' + pkgErr.message); return; }
   }
-  const { data, error } = await sb.from('bookings').insert({
-    slot_id: slotId, parent_id: parentId, child_id: forSelf ? null : childId,
+  const rows = finalTargets.map(t => ({
+    slot_id: t.id, parent_id: parentId, child_id: forSelf ? null : childId,
     payment_method: payMethod, package_used: packageUsed, status: 'confirmed', for_self: !!forSelf,
-  }).select().single();
+  }));
+  const { data, error } = await sb.from('bookings').insert(rows).select();
   if(error){ toast('Hiba a foglaláskor: ' + error.message); return; }
   closeModal();
-  toast('Foglalás rögzítve.');
-  notifyNewBooking(data.id).catch(()=>{});
+  toast(finalTargets.length>1 ? `${finalTargets.length} időpont rögzítve.` : 'Foglalás rögzítve.');
+  notifyNewBooking(data.map(b=>b.id)).catch(()=>{});
   await refreshDB();
   boot();
 }
@@ -1109,7 +1142,7 @@ function viewTherapistAnnounce(user){
   const calendar = renderWeekCalendar(ownSlots, {
     showTherapist:false,
     showParticipants:true,
-    actionRenderer: (s) => `<button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
+    actionRenderer: (s) => `<button class="btn btn-primary btn-sm cal-slot-btn" data-admin-book-slot="${s.id}" style="margin-bottom:4px;">Foglalás felvétele</button><button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
   });
   const ownServices = db.serviceTypes.filter(s=>s.therapistId===user.id);
   const roomOpts = db.rooms.filter(r=>r.needsTherapist).map(r=>`<option value="${r.id}">${r.name} (max ${r.capacity} fő)</option>`).join('');
