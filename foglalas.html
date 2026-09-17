@@ -450,13 +450,16 @@ function renderWeekCalendar(slots, opts){
   // szélesebb lesz, a naptár pedig vízszintesen görgethető.
   const roomsToShow = (roomFilter && roomFilter.size>0) ? db.rooms.filter(r=>roomFilter.has(r.id)) : db.rooms;
   const COL_W = 185;
-  const dayWidth = Math.max(roomsToShow.length,1) * COL_W + 24;
   const dayCols = days.map((d,i)=>{
     const dayStr = d.toDateString();
     const daySlots = slots.filter(s=> new Date(s.date).toDateString()===dayStr).sort((a,b)=>new Date(a.date)-new Date(b.date));
     const isPast = d < todayMid;
     const isToday = d.getTime() === todayMid.getTime();
-    const roomCols = roomsToShow.map(room=>{
+    // Csak azok a termek kapnak oszlopot, amelyekben ezen a napon tényleg van
+    // meghirdetett időpont — így a nap nem lesz feleslegesen széles.
+    const dayRooms = roomsToShow.filter(r => daySlots.some(s=>s.roomId===r.id));
+    const dayWidth = Math.max(dayRooms.length,1) * COL_W + 24;
+    const roomCols = dayRooms.map(room=>{
       const roomSlots = daySlots.filter(s=>s.roomId===room.id);
       const items = roomSlots.map(s=>{
         const service = serviceOf(s.serviceTypeId);
@@ -487,12 +490,12 @@ function renderWeekCalendar(slots, opts){
           ${participants}
           ${action}
         </div>`;
-      }).join('') || '<p class="cal-empty">—</p>';
+      }).join('');
       return `<div class="cal-room-col"><div class="cal-room-label"><span class="dot" style="background:${room.color}"></span>${room.name}</div>${items}</div>`;
     }).join('');
     return `<div class="cal-day ${isPast?'past':''} ${isToday?'today':''}" style="width:${dayWidth}px;">
       <div class="cal-day-head">${DAY_NAMES_HU[i]}<span>${d.toLocaleDateString('hu-HU',{month:'short',day:'numeric'})}</span></div>
-      <div class="cal-day-rooms" style="grid-template-columns:repeat(${Math.max(roomsToShow.length,1)},minmax(0,1fr));">${roomsToShow.length===0 ? '<p class="cal-empty">Nincs helyiség</p>' : roomCols}</div>
+      <div class="cal-day-rooms" style="grid-template-columns:repeat(${Math.max(dayRooms.length,1)},minmax(0,1fr));">${dayRooms.length===0 ? '<p class="cal-empty">Nincs időpont</p>' : roomCols}</div>
     </div>`;
   }).join('');
   const nextDisabled = opts.maxDate && addDays(calWeekStart,7) > opts.maxDate;
