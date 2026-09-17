@@ -120,6 +120,10 @@ main{padding:36px 0 80px;}
 .cal-slot-top{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:3px;}
 .cal-slot-service{font-weight:700;color:var(--teal-deep);margin-bottom:2px;line-height:1.3;}
 .cal-slot-ther{color:var(--ink-soft);font-size:0.74rem;margin-bottom:6px;}
+.cal-attendees{list-style:none;margin:0 0 6px;padding:6px 0 0;border-top:1px dashed var(--line);}
+.cal-attendees li{font-size:0.74rem;color:var(--teal-deep);font-weight:600;padding:2px 0 2px 12px;position:relative;line-height:1.35;}
+.cal-attendees li::before{content:"•";position:absolute;left:2px;color:var(--teal);}
+.cal-att-self{font-weight:500;color:var(--ink-soft);font-style:italic;}
 .cal-slot-btn{width:100%;margin-top:4px;}
 .cal-slot-past{font-size:0.72rem;color:var(--ink-soft);font-style:italic;}
 .cal-empty{font-size:0.76rem;color:var(--ink-soft);text-align:center;padding:18px 0;}
@@ -460,10 +464,24 @@ function renderWeekCalendar(slots, opts){
         const action = opts.actionRenderer ? opts.actionRenderer(s, full, isPast) : '';
         const countLabel = opts.hideCount ? (full ? 'Betelt' : 'Van szabad hely') : `${s.bookedChildIds.length}/${s.capacity} fő`;
         const therName = ther ? (opts.therapistNameFn ? opts.therapistNameFn(ther) : ther.name) : 'Nincs terapeuta';
+        let participants = '';
+        if(opts.showParticipants){
+          const slotBookings = db.bookings.filter(b=>b.slotId===s.id && b.status!=='cancelled');
+          if(slotBookings.length>0){
+            const names = slotBookings.map(b=>{
+              const parent = userOf(b.parentId);
+              if(b.forSelf) return `${parent ? parent.name : '—'} <span class="cal-att-self">(saját maga)</span>`;
+              const child = parent ? parent.children.find(c=>c.id===b.childId) : null;
+              return child ? child.name : '—';
+            });
+            participants = `<ul class="cal-attendees">${names.map(n=>`<li>${n}</li>`).join('')}</ul>`;
+          }
+        }
         return `<div class="cal-slot ${isOwn?'own':''}">
           <div class="cal-slot-top"><strong>${time}</strong><span class="pill ${full?'full':''}">${countLabel}</span></div>
           <div class="cal-slot-service">${service.name}</div>
           ${opts.showTherapist!==false ? `<div class="cal-slot-ther">${therName}${isOwn?' · Sajátom':''}</div>` : ''}
+          ${participants}
           ${action}
         </div>`;
       }).join('');
@@ -1075,7 +1093,7 @@ function viewPackages(user){
    TERAPEUTA: NAPTÁR
    ========================================================= */
 function viewTherapistTeamCalendar(user){
-  const calendar = renderWeekCalendar(applyRoomFilter(db.slots), { ownId:user.id });
+  const calendar = renderWeekCalendar(applyRoomFilter(db.slots), { ownId:user.id, showParticipants:true });
   return `<div class="card"><h3 class="section-title">Teljes csapatnaptár</h3><p class="muted" style="margin-bottom:18px;">Minden kolléga és a Masszázsfotel foglalásai — a sajátjaid kiemelve.</p>${renderRoomFilterBar()}${calendar}</div>`;
 }
 
@@ -1084,6 +1102,7 @@ function viewTherapistAnnounce(user){
   const ownSlots = applyRoomFilter(db.slots.filter(s=>s.therapistId===user.id));
   const calendar = renderWeekCalendar(ownSlots, {
     showTherapist:false,
+    showParticipants:true,
     actionRenderer: (s) => `<button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
   });
   const ownServices = db.serviceTypes.filter(s=>s.therapistId===user.id);
@@ -1204,6 +1223,7 @@ function viewAdminCalendar(user){
     return `<option value="${s.id}">${s.name}${ther ? ' ('+ther.name+')' : ' (központi)'} — ${fmtHUF(s.price)}</option>`;
   }).join('');
   const calendar = renderWeekCalendar(applyRoomFilter(db.slots), {
+    showParticipants:true,
     actionRenderer: (s) => `<button class="btn btn-primary btn-sm cal-slot-btn" data-admin-book-slot="${s.id}" style="margin-bottom:4px;">Foglalás felvétele</button><button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
   });
 
