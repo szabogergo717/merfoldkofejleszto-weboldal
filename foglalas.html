@@ -106,13 +106,14 @@ main{padding:36px 0 80px;}
 .room-filter-pill .dot{width:9px;height:9px;border-radius:50%;flex:none;}
 .cal-nav{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;flex-wrap:wrap;}
 .cal-nav strong{font-family:var(--ff-display);color:var(--teal-deep);font-size:1.05rem;}
-.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(160px,1fr));gap:10px;overflow-x:auto;padding-bottom:6px;}
-.cal-day{background:var(--white);border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px;min-height:130px;}
+.cal-grid{display:flex;gap:10px;overflow-x:auto;padding-bottom:8px;-webkit-overflow-scrolling:touch;}
+.cal-day{background:var(--white);border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px;min-height:130px;flex:none;}
+.cal-day-rooms{display:grid;gap:8px;align-items:start;}
+.cal-room-col{min-width:0;}
 .cal-day.today{border-color:var(--coral);box-shadow:0 0 0 1px var(--coral);}
 .cal-day.past{opacity:0.55;}
 .cal-day-head{font-weight:700;font-size:0.84rem;color:var(--teal-deep);margin-bottom:10px;display:flex;flex-direction:column;gap:2px;text-align:center;padding-bottom:8px;border-bottom:1px solid var(--line);}
 .cal-day-head span{font-weight:600;color:var(--ink-soft);font-size:0.72rem;text-transform:uppercase;letter-spacing:0.03em;}
-.cal-room-group{margin-bottom:12px;}
 .cal-room-label{display:flex;align-items:center;gap:6px;font-size:0.7rem;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:0.03em;margin-bottom:6px;}
 .cal-room-label .dot{width:8px;height:8px;border-radius:50%;flex:none;}
 .cal-slot{background:var(--mint-bg);border-radius:10px;padding:9px 10px;margin-bottom:6px;font-size:0.8rem;}
@@ -127,7 +128,7 @@ main{padding:36px 0 80px;}
 .cal-slot-btn{width:100%;margin-top:4px;}
 .cal-slot-past{font-size:0.72rem;color:var(--ink-soft);font-style:italic;}
 .cal-empty{font-size:0.76rem;color:var(--ink-soft);text-align:center;padding:18px 0;}
-@media (max-width:720px){.cal-grid{grid-template-columns:repeat(7,220px);}}
+@media (max-width:720px){.cal-day{padding:10px;}}
 
 /* table */
 table{width:100%;border-collapse:collapse;font-size:0.88rem;}
@@ -445,17 +446,19 @@ function renderWeekCalendar(slots, opts){
   opts = opts || {};
   const todayMid = new Date(); todayMid.setHours(0,0,0,0);
   const days = [0,1,2,3,4,5,6].map(i=>addDays(calWeekStart,i));
+  // A termek párhuzamos oszlopokként jelennek meg egy napon belül — így egy nap
+  // szélesebb lesz, a naptár pedig vízszintesen görgethető.
+  const roomsToShow = (roomFilter && roomFilter.size>0) ? db.rooms.filter(r=>roomFilter.has(r.id)) : db.rooms;
+  const COL_W = 185;
+  const dayWidth = Math.max(roomsToShow.length,1) * COL_W + 24;
   const dayCols = days.map((d,i)=>{
     const dayStr = d.toDateString();
     const daySlots = slots.filter(s=> new Date(s.date).toDateString()===dayStr).sort((a,b)=>new Date(a.date)-new Date(b.date));
     const isPast = d < todayMid;
     const isToday = d.getTime() === todayMid.getTime();
-    const byRoom = {};
-    daySlots.forEach(s=>{ (byRoom[s.roomId] = byRoom[s.roomId]||[]).push(s); });
-    const roomKeys = Object.keys(byRoom);
-    const body = roomKeys.length===0 ? '<p class="cal-empty">Nincs időpont</p>' : roomKeys.map(roomId=>{
-      const room = roomOf(roomId);
-      const items = byRoom[roomId].map(s=>{
+    const roomCols = roomsToShow.map(room=>{
+      const roomSlots = daySlots.filter(s=>s.roomId===room.id);
+      const items = roomSlots.map(s=>{
         const service = serviceOf(s.serviceTypeId);
         const ther = s.therapistId ? therapistOf(s.therapistId) : null;
         const full = s.bookedChildIds.length >= s.capacity;
@@ -484,12 +487,12 @@ function renderWeekCalendar(slots, opts){
           ${participants}
           ${action}
         </div>`;
-      }).join('');
-      return `<div class="cal-room-group"><div class="cal-room-label"><span class="dot" style="background:${room.color}"></span>${room.name}</div>${items}</div>`;
+      }).join('') || '<p class="cal-empty">—</p>';
+      return `<div class="cal-room-col"><div class="cal-room-label"><span class="dot" style="background:${room.color}"></span>${room.name}</div>${items}</div>`;
     }).join('');
-    return `<div class="cal-day ${isPast?'past':''} ${isToday?'today':''}">
+    return `<div class="cal-day ${isPast?'past':''} ${isToday?'today':''}" style="width:${dayWidth}px;">
       <div class="cal-day-head">${DAY_NAMES_HU[i]}<span>${d.toLocaleDateString('hu-HU',{month:'short',day:'numeric'})}</span></div>
-      <div class="cal-day-body">${body}</div>
+      <div class="cal-day-rooms" style="grid-template-columns:repeat(${Math.max(roomsToShow.length,1)},minmax(0,1fr));">${roomsToShow.length===0 ? '<p class="cal-empty">Nincs helyiség</p>' : roomCols}</div>
     </div>`;
   }).join('');
   const nextDisabled = opts.maxDate && addDays(calWeekStart,7) > opts.maxDate;
