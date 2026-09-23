@@ -668,7 +668,7 @@ function boot(){
 
   const tabsByRole = {
     parent: [['book','Naptár & Foglalás'],['mybookings','Foglalásaim'],['children','Gyermekeim'],['packages','Bérletem']],
-    therapist: [['calendar','Csapatnaptár'],['announce','Saját órák kiírása'],['payments','Fizetések'],['packages','Bérletek']],
+    therapist: [['calendar','Csapatnaptár'],['announce','Saját órák kiírása'],['payments','Fizetések'],['packages','Bérletek'],['manage_parents','Szülők / Felhasználók']],
     admin: [['calendar','Naptár'],['manage_bookings','Foglalások / fizetések'],['manage_packages','Bérletek'],['manage_parents','Szülők / Felhasználók'],['manage_therapists','Terapeuták'],['manage_rooms','Helyiségek'],['manage_services','Szolgáltatások & árak'],['rental','Terembérleti díjak']],
   };
   const tabs = tabsByRole[user.role];
@@ -695,6 +695,7 @@ function renderView(user, tab){
     if(tab==='announce') root.innerHTML = viewTherapistAnnounce(user);
     if(tab==='payments') root.innerHTML = viewTherapistPayments(user);
     if(tab==='packages') root.innerHTML = viewAdminPackages(user);
+    if(tab==='manage_parents') root.innerHTML = viewAdminParents(user);
   }
   if(user.role==='admin'){
     if(tab==='calendar') root.innerHTML = viewAdminCalendar(user);
@@ -1356,21 +1357,24 @@ function viewAdminBookings(user){
    ADMIN: SZÜLŐK (gyermek hozzáadása a szülő helyett)
    ========================================================= */
 function viewAdminParents(user){
+  const isAdmin = user.role==='admin';
   const parents = db.users.filter(u=>u.role==='parent');
   const rows = parents.map(p=>{
     const childRows = p.children.map(c=>`
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
         <span>${c.name}${c.birthDate?` <span class="muted" style="font-size:0.76rem;">(${c.birthDate})</span>`:''}</span>
-        <span style="white-space:nowrap;">
+        ${isAdmin ? `<span style="white-space:nowrap;">
           <button class="btn btn-ghost btn-sm" data-edit-child="${c.id}" style="padding:4px 9px;font-size:0.72rem;">Szerkesztés</button>
           <button class="btn btn-danger btn-sm" data-delete-child="${c.id}" style="padding:4px 9px;font-size:0.72rem;">Törlés</button>
-        </span>
+        </span>` : ''}
       </div>`).join('') || '<span class="muted">nincs rögzített gyermek</span>';
     return `<tr><td>${p.name}</td><td>${p.phone||'—'}</td><td>${childRows}</td><td><button class="btn btn-ghost btn-sm" data-add-child-for="${p.id}">+ Gyermek hozzáadása</button></td></tr>`;
   }).join('') || '<tr><td colspan="4" class="muted">Nincs regisztrált szülő.</td></tr>';
   return `<div class="card">
     <h3 class="section-title">Szülők / Felhasználók</h3>
-    <p class="muted" style="margin-bottom:16px;">Itt tudsz gyermeket felvenni, szerkeszteni vagy törölni bármelyik szülő fiókjához, ha ő maga nem tudná megtenni (pl. telefonos regisztrációnál, névelírásnál).</p>
+    <p class="muted" style="margin-bottom:16px;">${isAdmin
+      ? 'Itt tudsz gyermeket felvenni, szerkeszteni vagy törölni bármelyik szülő fiókjához, ha ő maga nem tudná megtenni (pl. telefonos regisztrációnál, névelírásnál).'
+      : 'Itt tudsz gyermeket felvenni egy szülő fiókjához, ha ő maga nem tudná megtenni (pl. telefonos jelentkezésnél) — utána rá tudod tenni a saját órádra. Meglévő adat szerkesztése és törlése admin jog.'}</p>
     <div style="overflow-x:auto;"><table><thead><tr><th>Szülő / Felhasználó</th><th>Telefon</th><th>Gyermekei</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
   </div>`;
 }
@@ -1442,6 +1446,52 @@ function openAddChildForParentModal(parentId){
   });
 }
 
+/* Bérlet szerkesztése és törlése — admin és terapeuta egyaránt. */
+function openPackageModal(packageId){
+  const p = db.packages.find(x=>x.id===packageId);
+  if(!p) return;
+  const parent = userOf(p.userId);
+  const child = p.childId && parent ? parent.children.find(c=>c.id===p.childId) : null;
+  const typeOpts = Array.from({length:12},(_,i)=>i+1).map(n=>`<option value="${n}" ${n===p.type?'selected':''}>${n} alkalmas</option>`).join('');
+  const remainOpts = Array.from({length:13},(_,i)=>i).map(n=>`<option value="${n}" ${n===p.remaining?'selected':''}>${n} alkalom</option>`).join('');
+  const expiryVal = p.expiresAt ? new Date(p.expiresAt).toISOString().slice(0,10) : '';
+  openModal(`
+    <button class="modal-close" data-close>&times;</button>
+    <h3>Bérlet szerkesztése</h3>
+    <p class="muted" style="margin-top:8px;">${parent?parent.name:'—'}${child?' · '+child.name:' · bármelyik gyermek'}</p>
+    <form id="packageForm" style="margin-top:16px;">
+      <div class="field"><label for="pkgEditType">Hány alkalmas</label><select id="pkgEditType">${typeOpts}</select></div>
+      <div class="field"><label for="pkgEditRemaining">Hátralévő alkalmak</label><select id="pkgEditRemaining">${remainOpts}</select></div>
+      <div class="field"><label for="pkgEditExpiry">Lejárat dátuma</label><input type="date" id="pkgEditExpiry" value="${expiryVal}">
+        <span class="hint">Üresen hagyva a bérlet nem jár le.</span></div>
+      <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">Mentés</button>
+    </form>
+  `);
+  document.getElementById('packageForm').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const type = parseInt(document.getElementById('pkgEditType').value,10);
+    const remaining = parseInt(document.getElementById('pkgEditRemaining').value,10);
+    const expiryRaw = document.getElementById('pkgEditExpiry').value;
+    if(remaining > type){ toast('A hátralévő alkalmak száma nem lehet több, mint a bérlet mérete.'); return; }
+    const { error } = await sb.from('packages').update({
+      type, remaining, expires_at: expiryRaw ? new Date(expiryRaw + 'T23:59:59').toISOString() : null,
+    }).eq('id', packageId);
+    if(error){ toast('Hiba: ' + error.message); return; }
+    closeModal(); toast('Bérlet frissítve.'); await refreshDB(); boot();
+  });
+}
+
+async function deletePackage(packageId){
+  const p = db.packages.find(x=>x.id===packageId);
+  if(!p) return;
+  const used = p.type - p.remaining;
+  if(used > 0 && !confirm(`Ebből a bérletből már ${used} alkalmat felhasználtak. A törlés nem mondja le a meglévő foglalásokat. Biztosan törlöd?`)) return;
+  if(used === 0 && !confirm('Biztosan törlöd ezt a bérletet?')) return;
+  const { error } = await sb.from('packages').delete().eq('id', packageId);
+  if(error){ toast('Hiba a törléskor: ' + error.message); return; }
+  toast('Bérlet törölve.'); await refreshDB(); boot();
+}
+
 function viewAdminPackages(user){
   const parents = db.users.filter(u=>u.role==='parent');
   const allChildren = [];
@@ -1456,8 +1506,9 @@ function viewAdminPackages(user){
     const statusLabel = expired ? '<span class="status-badge status-cancelled">Lejárt</span>' : '<span class="status-badge status-confirmed">Aktív</span>';
     const parent = userOf(p.userId);
     const child = p.childId ? parent?.children.find(c=>c.id===p.childId) : null;
-    return `<tr><td>${parent?.name||'—'}</td><td>${child?child.name:'<span class="muted">bármelyik gyermek</span>'}</td><td>${p.type} alkalmas</td><td>${p.remaining} maradt</td><td>${fmtDate(p.purchasedAt)}</td><td>${p.expiresAt?fmtDate(p.expiresAt):'—'}</td><td>${statusLabel}</td></tr>`;
-  }).join('') || '<tr><td colspan="7" class="muted">Nincs kiosztott bérlet.</td></tr>';
+    return `<tr><td>${parent?.name||'—'}</td><td>${child?child.name:'<span class="muted">bármelyik gyermek</span>'}</td><td>${p.type} alkalmas</td><td>${p.remaining} maradt</td><td>${fmtDate(p.purchasedAt)}</td><td>${p.expiresAt?fmtDate(p.expiresAt):'—'}</td><td>${statusLabel}</td>
+      <td style="white-space:nowrap;"><button class="btn btn-ghost btn-sm" data-edit-package="${p.id}">Szerkesztés</button> <button class="btn btn-danger btn-sm" data-delete-package="${p.id}">Törlés</button></td></tr>`;
+  }).join('') || '<tr><td colspan="8" class="muted">Nincs kiosztott bérlet.</td></tr>';
   return `<div class="grid-2">
     <div class="card"><h3 class="section-title">Bérlet hozzáadása</h3>
       <form id="addPackageForm">
@@ -1469,7 +1520,7 @@ function viewAdminPackages(user){
         <button type="submit" class="btn btn-primary btn-block" ${allChildren.length===0?'disabled':''}>Hozzáadás</button>
       </form>
     </div>
-    <div class="card"><h3 class="section-title">Kiosztott bérletek</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő / Felhasználó</th><th>Gyermek</th><th>Típus</th><th>Egyenleg</th><th>Kiosztás dátuma</th><th>Lejárat</th><th>Állapot</th></tr></thead><tbody>${rows}</tbody></table></div></div>
+    <div class="card"><h3 class="section-title">Kiosztott bérletek</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő / Felhasználó</th><th>Gyermek</th><th>Típus</th><th>Egyenleg</th><th>Kiosztás dátuma</th><th>Lejárat</th><th>Állapot</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>
   </div>`;
 }
 
@@ -1757,6 +1808,12 @@ function attachViewHandlers(user, tab){
   });
   root.querySelectorAll('[data-edit-child]').forEach(btn=>{
     btn.addEventListener('click', ()=> openEditChildModal(btn.dataset.editChild));
+  });
+  root.querySelectorAll('[data-edit-package]').forEach(btn=>{
+    btn.addEventListener('click', ()=> openPackageModal(btn.dataset.editPackage));
+  });
+  root.querySelectorAll('[data-delete-package]').forEach(btn=>{
+    btn.addEventListener('click', ()=> deletePackage(btn.dataset.deletePackage));
   });
   root.querySelectorAll('[data-delete-child]').forEach(btn=>{
     btn.addEventListener('click', ()=>{ if(confirm('Biztosan törlöd ezt a gyermeket?')) deleteChild(btn.dataset.deleteChild); });
