@@ -126,6 +126,7 @@ main{padding:36px 0 80px;}
 .cal-attendees li{font-size:0.74rem;color:var(--teal-deep);font-weight:600;padding:2px 0 2px 12px;position:relative;line-height:1.35;}
 .cal-attendees li::before{content:"•";position:absolute;left:2px;color:var(--teal);}
 .cal-att-self{font-weight:500;color:var(--ink-soft);font-style:italic;}
+.cal-slot.cancelled{opacity:0.62;}
 .cal-waitnote{font-size:0.72rem;color:var(--gold-deep,#C9950F);font-weight:700;margin:4px 0 6px;}
 .cal-attendees li{display:flex;align-items:center;justify-content:space-between;gap:4px;}
 .cal-att-remove{border:none;background:transparent;color:var(--danger,#B3392E);font-size:1rem;line-height:1;cursor:pointer;padding:0 4px;border-radius:4px;flex:none;}
@@ -256,7 +257,11 @@ footer.app-footer{text-align:center;padding:30px 0;color:var(--ink-soft);font-si
       <hr style="border:none;border-top:1px solid var(--line);margin:8px 0 16px;">
       <p class="muted" style="margin-bottom:14px;">Számlázási adatok — ezekre a foglalásokhoz kiállított számlákhoz van szükség.</p>
       <div class="field"><label for="regBillingName">Számlázási név</label><input type="text" id="regBillingName" required placeholder="Ha cégre/vállalkozásra kéred, annak neve"></div>
-      <div class="field"><label for="regBillingAddress">Számlázási cím</label><input type="text" id="regBillingAddress" required placeholder="Irányítószám, város, utca, házszám"></div>
+      <div class="field-row">
+        <div class="field"><label for="regBillingZip">Irányítószám</label><input type="text" id="regBillingZip" required placeholder="2073"></div>
+        <div class="field"><label for="regBillingCity">Település</label><input type="text" id="regBillingCity" required placeholder="Tök"></div>
+      </div>
+      <div class="field"><label for="regBillingAddress">Utca, házszám</label><input type="text" id="regBillingAddress" required placeholder="Ady Endre utca 27."></div>
       <div class="field"><label for="regTaxNumber">Adószám (ha van)</label><input type="text" id="regTaxNumber" placeholder="Magánszemélyként üresen hagyható"></div>
       <button type="submit" class="btn btn-primary btn-block">Fiók létrehozása</button>
       <p class="muted" style="margin-top:12px;font-size:0.78rem;text-align:center;">A regisztrációval elfogadod <a href="index.html#adatvedelem" onclick="window.open('adatvedelem.html','_blank');return false;" style="color:var(--teal);">adatkezelési tájékoztatónkat</a>.</p>
@@ -300,7 +305,7 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 function uid(prefix){ return prefix + '_' + Math.random().toString(36).slice(2,9); }
 
 /* Memóriában tartott, a nézetek által olvasott "gyorsítótár" — refreshDB() tölti fel Supabase-ből. */
-let db = { users:[], therapists:[], rooms:[], serviceTypes:[], packages:[], slots:[], bookings:[], assignments:[] };
+let db = { users:[], therapists:[], rooms:[], serviceTypes:[], packages:[], slots:[], bookings:[], assignments:[], vatRates:[] };
 let currentProfile = null;
 let dbReady = false;
 
@@ -308,7 +313,7 @@ let dbReady = false;
 function byNameHu(a,b){ return (a.name||'').localeCompare(b.name||'', 'hu', { sensitivity:'base' }); }
 
 async function refreshDB(){
-  const [profilesRes, childrenRes, therRes, roomsRes, svcRes, pkgRes, slotRes, bookRes, waitRes, clientsRes] = await Promise.all([
+  const [profilesRes, childrenRes, therRes, roomsRes, svcRes, pkgRes, slotRes, bookRes, waitRes, clientsRes, vatRes] = await Promise.all([
     sb.from('profiles').select('*'),
     sb.from('children').select('*'),
     sb.from('therapist_details').select('*'),
@@ -319,8 +324,9 @@ async function refreshDB(){
     sb.from('bookings').select('*'),
     sb.from('waitlist').select('*'),
     sb.from('therapist_clients').select('*'),
+    sb.from('vat_rates').select('*'),
   ]);
-  const firstError = [profilesRes,childrenRes,therRes,roomsRes,svcRes,pkgRes,slotRes,bookRes,waitRes,clientsRes].find(r=>r.error);
+  const firstError = [profilesRes,childrenRes,therRes,roomsRes,svcRes,pkgRes,slotRes,bookRes,waitRes,clientsRes,vatRes].find(r=>r.error);
   if(firstError){
     dbReady = false;
     toast('Nem sikerült elérni az adatbázist: ' + firstError.error.message + ' — futtattad már az SQL scriptet?');
@@ -339,14 +345,14 @@ async function refreshDB(){
 
   db.rooms = (roomsRes.data||[]).map(r=>({ id:r.id, name:r.name, capacity:r.capacity, color:r.color, needsTherapist:r.needs_therapist, rentalFee:r.rental_fee||0, rentalFeeGroup:r.rental_fee_group||0 }));
   db.serviceTypes = (svcRes.data||[]).map(s=>({ id:s.id, name:s.name, price:s.price, packageEligible:s.package_eligible, adminOnly:s.admin_only, therapistId:s.therapist_id||null, forSelf:s.for_self||false }));
-  db.packages = (pkgRes.data||[]).map(p=>({ id:p.id, userId:p.user_id, childId:p.child_id||null, type:p.type, remaining:p.remaining, purchasedAt:p.purchased_at, expiresAt:p.expires_at||null }));
-  db.bookings = (bookRes.data||[]).map(b=>({ id:b.id, slotId:b.slot_id, parentId:b.parent_id, childId:b.child_id, paymentMethod:b.payment_method, packageUsed:b.package_used, status:b.status, medicalCert:b.medical_cert_url, refund: b.refund_note ? {label:b.refund_note} : null, createdAt:b.created_at, cancelledAt:b.cancelled_at, invoiceRequested:b.invoice_requested||false, forSelf:b.for_self||false }));
+  db.packages = (pkgRes.data||[]).map(p=>({ id:p.id, userId:p.user_id, childId:p.child_id||null, type:p.type, remaining:p.remaining, purchasedAt:p.purchased_at, expiresAt:p.expires_at||null, price:p.price||0, invoiceNumber:p.invoice_number||null, invoicePdfUrl:p.invoice_pdf_url||null }));
+  db.bookings = (bookRes.data||[]).map(b=>({ id:b.id, slotId:b.slot_id, parentId:b.parent_id, childId:b.child_id, paymentMethod:b.payment_method, packageUsed:b.package_used, status:b.status, medicalCert:b.medical_cert_url, refund: b.refund_note ? {label:b.refund_note} : null, createdAt:b.created_at, cancelledAt:b.cancelled_at, invoiceRequested:b.invoice_requested||false, forSelf:b.for_self||false, invoiceNumber:b.invoice_number||null, invoicePdfUrl:b.invoice_pdf_url||null }));
   const waitlistRows = (waitRes.data||[]).map(w=>({ slotId:w.slot_id, childId:w.child_id, parentId:w.parent_id, addedAt:w.added_at }));
   db.slots = (slotRes.data||[]).map(s=>{
     const bookedChildIds = db.bookings.filter(b=>b.slotId===s.id && b.status!=='cancelled').map(b=>b.childId);
     const waitlist = waitlistRows.filter(w=>w.slotId===s.id);
     const bookedCount = (s.id in occupancy) ? occupancy[s.id] : (occRes.error ? bookedChildIds.length : 0);
-    return { id:s.id, date:s.date, duration:s.duration, roomId:s.room_id, therapistId:s.therapist_id, serviceTypeId:s.service_type_id, capacity:s.capacity, bookedChildIds, bookedCount, waitlist };
+    return { id:s.id, date:s.date, duration:s.duration, roomId:s.room_id, therapistId:s.therapist_id, serviceTypeId:s.service_type_id, capacity:s.capacity, bookedChildIds, bookedCount, waitlist, cancelledAt:s.cancelled_at||null, cancelReason:s.cancel_reason||null };
   });
   db.therapists = profiles.filter(p=>p.role==='therapist').map(p=>{
     const det = therDetails.find(d=>d.id===p.id) || {};
@@ -354,11 +360,12 @@ async function refreshDB(){
   });
   db.users = profiles.map(p=>({
     id:p.id, role:p.role, name:p.name, phone:p.phone||'', createdAt:p.created_at||null,
-    billingName:p.billing_name||'', billingAddress:p.billing_address||'', taxNumber:p.tax_number||'',
+    billingName:p.billing_name||'', billingAddress:p.billing_address||'', billingZip:p.billing_zip||'', billingCity:p.billing_city||'', taxNumber:p.tax_number||'',
     children: p.role==='parent' ? childrenRows.filter(c=>c.parent_id===p.id).map(c=>({id:c.id, name:c.name, birthDate:c.birth_date})).sort(byNameHu) : [],
   })).sort(byNameHu);
   db.therapists.sort(byNameHu);
   db.assignments = (clientsRes.data||[]).map(a=>({ id:a.id, therapistId:a.therapist_id, parentId:a.parent_id }));
+  db.vatRates = (vatRes.data||[]).map(v=>({ id:v.id, percent:v.percent, label:v.label||'' })).sort((a,b)=>a.percent-b.percent);
 }
 
 /* A terapeuta csak a hozzá rendelt szülőket (és azok gyermekeit) látja; az
@@ -506,6 +513,7 @@ function renderWeekCalendar(slots, opts){
         const action = opts.actionRenderer ? opts.actionRenderer(s, full, isPast) : '';
         // Terapeuta a MÁSIK terapeuta óráinál csak azt látja, milyen foglalkozás
         // és hogy betelt-e — létszámot és gyermekneveket nem.
+        const isCancelled = !!s.cancelledAt;
         const restricted = opts.restrictToOwnId && s.therapistId !== opts.restrictToOwnId;
         const hideCount = opts.hideCount || restricted;
         const countLabel = hideCount ? (full ? 'Betelt' : 'Van szabad hely') : `${s.bookedCount}/${s.capacity} fő`;
@@ -523,13 +531,13 @@ function renderWeekCalendar(slots, opts){
             participants = `<ul class="cal-attendees">${entries.map(e=>`<li>${e.html}${opts.allowRemove ? `<button type="button" class="cal-att-remove" data-remove-booking="${e.id}" title="Eltávolítás az óráról" aria-label="Eltávolítás az óráról">&times;</button>` : ''}</li>`).join('')}</ul>`;
           }
         }
-        return `<div class="cal-slot ${isOwn?'own':''}">
-          <div class="cal-slot-top"><strong>${time}</strong><span class="pill ${full?'full':''}">${countLabel}</span></div>
+        return `<div class="cal-slot ${isOwn?'own':''} ${isCancelled?'cancelled':''}">
+          <div class="cal-slot-top"><strong>${time}</strong><span class="pill ${isCancelled?'full':(full?'full':'')}">${isCancelled?'Elmarad':countLabel}</span></div>
           <div class="cal-slot-service">${service.name}</div>
           ${opts.showTherapist!==false ? `<div class="cal-slot-ther">${therName}${isOwn?' · Sajátom':''}</div>` : ''}
           ${participants}
           ${opts.showParticipants && !restricted && s.waitlist && s.waitlist.length>0 ? `<div class="cal-waitnote">⏳ ${s.waitlist.length} fő várólistán</div>` : ''}
-          ${action}
+          ${isCancelled ? `<div class="cal-waitnote">${s.cancelReason || 'Az alkalom elmarad'}</div>` : action}
         </div>`;
       }).join('');
       return `<div class="cal-room-col"><div class="cal-room-label"><span class="dot" style="background:${room.color}"></span>${room.name}</div>${items}</div>`;
@@ -647,11 +655,13 @@ registerForm.addEventListener('submit', async (e)=>{
   const pass = document.getElementById('regPass').value;
   const billingName = document.getElementById('regBillingName').value.trim();
   const billingAddress = document.getElementById('regBillingAddress').value.trim();
+  const billingZip = document.getElementById('regBillingZip').value.trim();
+  const billingCity = document.getElementById('regBillingCity').value.trim();
   const taxNumber = document.getElementById('regTaxNumber').value.trim();
   const submitBtn = registerForm.querySelector('button[type="submit"]'); submitBtn.disabled = true;
   const { data, error } = await sb.auth.signUp({
     email, password: pass,
-    options: { data: { name, phone, billing_name: billingName, billing_address: billingAddress, tax_number: taxNumber || null }, emailRedirectTo: window.location.origin + window.location.pathname },
+    options: { data: { name, phone, billing_name: billingName, billing_zip: billingZip, billing_city: billingCity, billing_address: billingAddress, tax_number: taxNumber || null }, emailRedirectTo: window.location.origin + window.location.pathname },
   });
   submitBtn.disabled = false;
   if(error){ showAuthError(error.message.includes('registered') ? 'Ez az e-mail cím már regisztrálva van.' : error.message); return; }
@@ -869,7 +879,7 @@ async function confirmAdminBooking(slotId, parentId, childId, forSelf){
     }
   }
   const alreadyBooked = t => db.bookings.some(b=>b.slotId===t.id && b.status!=='cancelled' && (forSelf ? (b.forSelf && b.parentId===parentId) : b.childId===childId));
-  const isFull = t => t.id!==s.id && t.bookedCount >= t.capacity;
+  const isFull = t => t.id!==s.id && (t.bookedCount >= t.capacity || t.cancelledAt);
   let finalTargets = targets.filter(t => !alreadyBooked(t) && !isFull(t));
   if(packageUsed) finalTargets = finalTargets.slice(0, pkg.remaining);
   if(finalTargets.length===0){ toast('Nem sikerült egyetlen időpontot sem lefoglalni (talán már mind foglalt vagy betelt).'); return; }
@@ -894,6 +904,10 @@ async function confirmAdminBooking(slotId, parentId, childId, forSelf){
 
 function openBookingModal(user, slotId){
   const s = db.slots.find(x=>x.id===slotId);
+  if(s.cancelledAt){
+    openModal('<button class="modal-close" data-close>&times;</button><h3>Ez az alkalom elmarad</h3><p class="muted" style="margin-top:8px;">' + (s.cancelReason || '') + '. Kérjük, válassz másik időpontot.</p>');
+    return;
+  }
   const room = roomOf(s.roomId); const service = serviceOf(s.serviceTypeId); const ther = s.therapistId ? therapistOf(s.therapistId) : null;
   const full = s.bookedCount >= s.capacity;
   const now = new Date();
@@ -971,7 +985,7 @@ async function confirmBooking(user, slotId){
     }
   }
   const alreadyBooked = t => db.bookings.some(b=>b.slotId===t.id && b.status!=='cancelled' && (forSelf ? (b.forSelf && b.parentId===user.id) : b.childId===childId));
-  const isFull = t => t.id!==s.id && t.bookedCount >= t.capacity;
+  const isFull = t => t.id!==s.id && (t.bookedCount >= t.capacity || t.cancelledAt);
   let finalTargets = targets.filter(t => !alreadyBooked(t) && !isFull(t));
   if(packageUsed) finalTargets = finalTargets.slice(0, pkg.remaining);
   if(finalTargets.length===0){ toast('Nem sikerült egyetlen időpontot sem lefoglalni (talán már mind foglalt vagy betelt).'); return; }
@@ -1337,7 +1351,9 @@ function viewTherapistPayments(user){
       <td>${service.name}</td>
       <td>${fmtDate(s.date)}</td>
       <td>${b.packageUsed ? 'Bérlet' : payLabel(b.paymentMethod)}</td>
-      <td>${b.invoiceRequested ? '<span class="pill">Kérte</span>' : '<span class="muted">—</span>'}</td>
+      <td>${b.invoiceNumber
+        ? (b.invoicePdfUrl ? `<a href="${b.invoicePdfUrl}" target="_blank" rel="noopener">${b.invoiceNumber}</a>` : b.invoiceNumber)
+        : `${b.invoiceRequested ? '<span class="pill">Kérte</span> ' : ''}${b.status!=='cancelled' && !b.packageUsed ? `<button class="btn btn-ghost btn-sm" data-invoice-booking="${b.id}" style="padding:4px 9px;font-size:0.72rem;">Számla</button>` : '<span class="muted">—</span>'}`}</td>
       <td><span class="status-badge status-${b.status}">${statusLabel}</span></td>
       <td style="font-size:0.78rem;white-space:nowrap;">${fmtDateTimeFull(b.createdAt)}</td>
       <td style="font-size:0.78rem;white-space:nowrap;">${b.cancelledAt ? fmtDateTimeFull(b.cancelledAt) : '—'}</td>
@@ -1362,7 +1378,7 @@ function viewTherapistPayments(user){
     <p class="muted" style="margin-bottom:16px;">A saját óráidra foglaló szülők számlázási adatai. Ezeket a szülő adja meg regisztrációkor; ha hiányos, kérd meg, hogy pótolja.</p>
     <div style="overflow-x:auto;"><table><thead><tr><th>Szülő / Felhasználó</th><th>Számlázási név</th><th>Számlázási cím</th><th>Adószám</th><th>Állapot</th></tr></thead><tbody>${billRows}</tbody></table></div>
   </div>`;
-  return invoicingCard + billingCard + `<div class="card"><h3 class="section-title">Saját óráim foglalásai & fizetései</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő / Felhasználó neve</th><th>Gyermek neve</th><th>Szolgáltatás</th><th>Időpont</th><th>Fizetés</th><th>Számla</th><th>Státusz</th><th>Jelentkezés ideje</th><th>Lemondás ideje</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  return invoicingCard + viewVatRatesCard() + billingCard + `<div class="card"><h3 class="section-title">Saját óráim foglalásai & fizetései</h3><div style="overflow-x:auto;"><table><thead><tr><th>Szülő / Felhasználó neve</th><th>Gyermek neve</th><th>Szolgáltatás</th><th>Időpont</th><th>Fizetés</th><th>Számla</th><th>Státusz</th><th>Jelentkezés ideje</th><th>Lemondás ideje</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
 /* =========================================================
@@ -1417,14 +1433,16 @@ function viewAdminBookings(user){
       <td>${service.name}</td>
       <td>${fmtDate(s.date)}</td>
       <td>${b.packageUsed ? 'Bérlet' : payLabel(b.paymentMethod)}</td>
-      <td>${b.invoiceRequested ? '<span class="pill">Kérte</span>' : '<span class="muted">—</span>'}</td>
+      <td>${b.invoiceNumber
+        ? (b.invoicePdfUrl ? `<a href="${b.invoicePdfUrl}" target="_blank" rel="noopener">${b.invoiceNumber}</a>` : b.invoiceNumber)
+        : `${b.invoiceRequested ? '<span class="pill">Kérte</span> ' : ''}${b.status!=='cancelled' && !b.packageUsed ? `<button class="btn btn-ghost btn-sm" data-invoice-booking="${b.id}" style="padding:4px 9px;font-size:0.72rem;">Számla</button>` : '<span class="muted">—</span>'}`}</td>
       <td><span class="status-badge status-${b.status}">${statusLabel}</span></td>
       <td style="font-size:0.78rem;white-space:nowrap;">${fmtDateTimeFull(b.createdAt)}</td>
       <td style="font-size:0.78rem;white-space:nowrap;">${b.cancelledAt ? fmtDateTimeFull(b.cancelledAt) : '—'}</td>
       <td style="white-space:nowrap;">${canMarkPaid ? `<button class="btn btn-primary btn-sm" data-mark-paid="${b.id}">Fizetve</button>` : ''} ${canStaffCancel ? `<button class="btn btn-danger btn-sm" data-cancel-booking="${b.id}">Lemondás</button>` : ''}</td>
     </tr>`;
   }).join('');
-  return `<div class="card"><h3 class="section-title">Foglalások & fizetések</h3>
+  return viewVatRatesCard() + `<div class="card"><h3 class="section-title">Foglalások & fizetések</h3>
     <div class="bulk-bar">
       <label class="checkbox-row" style="margin:0;"><input type="checkbox" id="bulkSelectAll"><span>Összes jövőbeli kijelölése</span></label>
       <button type="button" class="btn btn-danger btn-sm" id="bulkCancelBtn" disabled>Kijelöltek eltávolítása (0)</button>
@@ -1600,6 +1618,7 @@ function openPackageModal(packageId){
     <form id="packageForm" style="margin-top:16px;">
       <div class="field"><label for="pkgEditType">Hány alkalmas</label><select id="pkgEditType">${typeOpts}</select></div>
       <div class="field"><label for="pkgEditRemaining">Hátralévő alkalmak</label><select id="pkgEditRemaining">${remainOpts}</select></div>
+      <div class="field"><label for="pkgEditPrice">Bérlet ára (Ft)</label><input type="number" id="pkgEditPrice" min="0" step="500" value="${p.price||0}"></div>
       <div class="field"><label for="pkgEditExpiry">Lejárat dátuma</label><input type="date" id="pkgEditExpiry" value="${expiryVal}">
         <span class="hint">Üresen hagyva a bérlet nem jár le.</span></div>
       <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">Mentés</button>
@@ -1613,6 +1632,7 @@ function openPackageModal(packageId){
     if(remaining > type){ toast('A hátralévő alkalmak száma nem lehet több, mint a bérlet mérete.'); return; }
     const { error } = await sb.from('packages').update({
       type, remaining, expires_at: expiryRaw ? new Date(expiryRaw + 'T23:59:59').toISOString() : null,
+      price: parseInt(document.getElementById('pkgEditPrice').value,10) || 0,
     }).eq('id', packageId);
     if(error){ toast('Hiba: ' + error.message); return; }
     closeModal(); toast('Bérlet frissítve.'); await refreshDB(); boot();
@@ -1628,6 +1648,84 @@ async function deletePackage(packageId){
   const { error } = await sb.from('packages').delete().eq('id', packageId);
   if(error){ toast('Hiba a törléskor: ' + error.message); return; }
   toast('Bérlet törölve.'); await refreshDB(); boot();
+}
+
+
+/* =========================================================
+   SZÁMLÁZÁS (Számlázz.hu) — áfakulcsok és számla kiállítása
+   ========================================================= */
+function viewVatRatesCard(){
+  const rows = db.vatRates.map(v=>`<span class="pill" style="margin:0 6px 6px 0;display:inline-flex;align-items:center;gap:6px;">${v.percent}% ${v.label?('· '+v.label):''}
+      <button class="cal-att-remove" data-delete-vat="${v.id}" title="Törlés" aria-label="Áfakulcs törlése">&times;</button></span>`).join('')
+    || '<span class="muted">Nincs felvett áfakulcs.</span>';
+  return `<div class="card" style="margin-bottom:24px;">
+    <h3 class="section-title">Áfakulcsok</h3>
+    <p class="muted" style="margin-bottom:12px;">Ezek közül lehet választani számlázáskor. A 0% az áfamentes (AAM) tételekhez való.</p>
+    <div style="margin-bottom:14px;">${rows}</div>
+    <form id="vatForm" class="field-row">
+      <div class="field"><label for="vatPercent">Új áfakulcs (%)</label><input type="number" id="vatPercent" min="0" max="100" step="1" required></div>
+      <div class="field"><label for="vatLabel">Megnevezés (nem kötelező)</label><input type="text" id="vatLabel" placeholder="pl. Tárgyi adómentes"></div>
+      <div class="field" style="align-self:flex-end;"><button type="submit" class="btn btn-primary btn-block">Felvétel</button></div>
+    </form>
+  </div>`;
+}
+
+function openInvoiceModal(kind, id){
+  const isBooking = kind==='booking';
+  const b = isBooking ? db.bookings.find(x=>x.id===id) : null;
+  const pkg = isBooking ? null : db.packages.find(x=>x.id===id);
+  const slot = b ? db.slots.find(x=>x.id===b.slotId) : null;
+  const service = slot ? serviceOf(slot.serviceTypeId) : null;
+  const parent = userOf(isBooking ? b.parentId : pkg.userId);
+  const amount = isBooking ? (service?service.price:0) : (pkg.price||0);
+  const missing = !parent?.billingName || !parent?.billingZip || !parent?.billingCity || !parent?.billingAddress;
+  const vatOpts = db.vatRates.map(v=>`<option value="${v.percent}" ${v.percent===0?'selected':''}>${v.percent}%${v.label?' · '+v.label:''}</option>`).join('')
+    || '<option value="0">0%</option>';
+  const defaultFulfil = isBooking
+    ? (b.paymentMethod==='cash' ? new Date(slot.date) : new Date())
+    : new Date();
+  openModal(`
+    <button class="modal-close" data-close>&times;</button>
+    <h3>Számla kiállítása</h3>
+    <p class="muted" style="margin-top:8px;">${isBooking ? (service?service.name:'') + ' · ' + fmtDate(slot.date) : (pkg.type + ' alkalmas bérlet')}</p>
+    <div class="pay-detail-box" style="margin-top:14px;">
+      <div><span>Vevő</span><span><strong>${parent?parent.billingName||parent.name:'—'}</strong></span></div>
+      <div><span>Cím</span><span>${parent&&parent.billingZip?`${parent.billingZip} ${parent.billingCity}, ${parent.billingAddress}`:'<em>hiányzik</em>'}</span></div>
+      <div><span>Összeg (bruttó)</span><span><strong>${fmtHUF(amount)}</strong></span></div>
+    </div>
+    ${missing ? '<p class="badge-inline" style="margin-top:12px;">Hiányos számlázási adatok — előbb a szülőnek pótolnia kell.</p>' : ''}
+    ${amount<=0 ? '<p class="badge-inline" style="margin-top:12px;">Nincs megadva összeg — bérletnél add meg az árat a bérlet szerkesztésénél.</p>' : ''}
+    <form id="invoiceForm" style="margin-top:14px;">
+      <div class="field"><label for="invVat">Áfakulcs</label><select id="invVat">${vatOpts}</select></div>
+      <div class="field"><label for="invFulfil">Teljesítés dátuma</label><input type="date" id="invFulfil" value="${defaultFulfil.toISOString().slice(0,10)}">
+        <span class="hint">Készpénznél az alkalom napja, átutalásnál a beérkezés napja az alapérték.</span></div>
+      <button type="submit" class="btn btn-primary btn-block" style="margin-top:14px;" ${missing||amount<=0?'disabled':''}>Számla kiállítása és kiküldése</button>
+      <p class="muted" style="margin-top:10px;font-size:0.78rem;">A számlát a Számlázz.hu állítja ki a terapeuta saját fiókjában, és e-mailben elküldi a vevőnek.</p>
+    </form>
+  `);
+  document.getElementById('invoiceForm').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    btn.disabled = true; btn.textContent = 'Számla készül…';
+    const payload = {
+      vatPercent: parseInt(document.getElementById('invVat').value,10),
+      fulfilmentDate: document.getElementById('invFulfil').value,
+    };
+    if(isBooking) payload.bookingId = id; else { payload.packageId = id; payload.therapistId = currentUser().role==='therapist' ? currentUser().id : null; }
+    try{
+      const res = await fetch(SUPABASE_URL + '/functions/v1/create-invoice', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer ' + SUPABASE_ANON_KEY },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if(!res.ok || data.error){ toast(data.error || 'Nem sikerült a számla kiállítása.'); btn.disabled=false; btn.textContent='Számla kiállítása és kiküldése'; return; }
+      closeModal(); toast('Számla kiállítva: ' + data.invoiceNumber);
+      await refreshDB(); boot();
+    }catch(err){
+      toast('Hiba: ' + err.message); btn.disabled=false; btn.textContent='Számla kiállítása és kiküldése';
+    }
+  });
 }
 
 function viewAdminPackages(user){
@@ -1646,7 +1744,10 @@ function viewAdminPackages(user){
     const parent = userOf(p.userId);
     const child = p.childId ? parent?.children.find(c=>c.id===p.childId) : null;
     return `<tr><td>${parent?.name||'—'}</td><td>${child?child.name:'<span class="muted">bármelyik gyermek</span>'}</td><td>${p.type} alkalmas</td><td>${p.remaining} maradt</td><td>${fmtDate(p.purchasedAt)}</td><td>${p.expiresAt?fmtDate(p.expiresAt):'—'}</td><td>${statusLabel}</td>
-      <td style="white-space:nowrap;"><button class="btn btn-ghost btn-sm" data-edit-package="${p.id}">Szerkesztés</button> <button class="btn btn-danger btn-sm" data-delete-package="${p.id}">Törlés</button></td></tr>`;
+      <td style="white-space:nowrap;">${p.invoiceNumber
+        ? (p.invoicePdfUrl ? `<a href="${p.invoicePdfUrl}" target="_blank" rel="noopener">${p.invoiceNumber}</a>` : p.invoiceNumber)
+        : `<button class="btn btn-ghost btn-sm" data-invoice-package="${p.id}">Számla</button>`}
+        <button class="btn btn-ghost btn-sm" data-edit-package="${p.id}">Szerkesztés</button> <button class="btn btn-danger btn-sm" data-delete-package="${p.id}">Törlés</button></td></tr>`;
   }).join('') || '<tr><td colspan="8" class="muted">Nincs kiosztott bérlet.</td></tr>';
   return `<div class="grid-2">
     <div class="card"><h3 class="section-title">Bérlet hozzáadása</h3>
@@ -1655,6 +1756,8 @@ function viewAdminPackages(user){
         <div id="pkgParentWrap"></div>
         <div class="field"><label for="pkgType">Hány alkalmas</label><select id="pkgType" required>${typeOpts}</select></div>
         <div class="field"><label for="pkgWeeks">Érvényesség (hét)</label><select id="pkgWeeks" required>${weekOpts}</select></div>
+        <div class="field"><label for="pkgPrice">Bérlet ára (Ft)</label><input type="number" id="pkgPrice" min="0" step="500" value="0">
+          <span class="hint">A számlázáshoz kell — utólag is megadható a szerkesztésnél.</span></div>
         <p class="muted" style="margin-bottom:14px;">A bérlet a kiosztástól számított ennyi hét múlva lejár, utána nem használható fel belőle alkalom.</p>
         <button type="submit" class="btn btn-primary btn-block" ${allChildren.length===0?'disabled':''}>Hozzáadás</button>
       </form>
@@ -1948,6 +2051,28 @@ function attachViewHandlers(user, tab){
   root.querySelectorAll('[data-edit-child]').forEach(btn=>{
     btn.addEventListener('click', ()=> openEditChildModal(btn.dataset.editChild));
   });
+  const vatForm = document.getElementById('vatForm');
+  if(vatForm) vatForm.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const percent = parseInt(document.getElementById('vatPercent').value,10);
+    const label = document.getElementById('vatLabel').value.trim();
+    const { error } = await sb.from('vat_rates').insert({ percent, label: label || null });
+    if(error){ toast(error.message.includes('duplicate') ? 'Ez az áfakulcs már szerepel a listában.' : 'Hiba: ' + error.message); return; }
+    toast('Áfakulcs felvéve.'); await refreshDB(); boot();
+  });
+  root.querySelectorAll('[data-delete-vat]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const { error } = await sb.from('vat_rates').delete().eq('id', btn.dataset.deleteVat);
+      if(error){ toast('Hiba: ' + error.message); return; }
+      toast('Áfakulcs törölve.'); await refreshDB(); boot();
+    });
+  });
+  root.querySelectorAll('[data-invoice-booking]').forEach(btn=>{
+    btn.addEventListener('click', ()=> openInvoiceModal('booking', btn.dataset.invoiceBooking));
+  });
+  root.querySelectorAll('[data-invoice-package]').forEach(btn=>{
+    btn.addEventListener('click', ()=> openInvoiceModal('package', btn.dataset.invoicePackage));
+  });
   root.querySelectorAll('[data-leave-waitlist]').forEach(btn=>{
     btn.addEventListener('click', ()=> leaveWaitlist(btn.dataset.leaveWaitlist, btn.dataset.child || null));
   });
@@ -2137,6 +2262,7 @@ function attachViewHandlers(user, tab){
     if(!child){ toast('Válassz gyermeket.'); return; }
     const { error } = await sb.from('packages').insert({
       user_id: child.parentId, child_id: childId, type, remaining: type, expires_at: expiresAt,
+      price: parseInt(document.getElementById('pkgPrice').value,10) || 0,
     });
     if(error){ toast('Hiba: ' + error.message); return; }
     toast('Bérlet hozzáadva.'); await refreshDB(); boot();
