@@ -255,14 +255,8 @@ footer.app-footer{text-align:center;padding:30px 0;color:var(--ink-soft);font-si
       <div class="field"><label for="regPhone">Telefonszám</label><input type="tel" id="regPhone" required></div>
       <div class="field"><label for="regPass">Jelszó</label><input type="password" id="regPass" required minlength="4"></div>
       <hr style="border:none;border-top:1px solid var(--line);margin:8px 0 16px;">
-      <p class="muted" style="margin-bottom:14px;">Számlázási adatok — ezekre a foglalásokhoz kiállított számlákhoz van szükség.</p>
-      <div class="field"><label for="regBillingName">Számlázási név</label><input type="text" id="regBillingName" required placeholder="Ha cégre/vállalkozásra kéred, annak neve"></div>
-      <div class="field-row">
-        <div class="field"><label for="regBillingZip">Irányítószám</label><input type="text" id="regBillingZip" required placeholder="2073"></div>
-        <div class="field"><label for="regBillingCity">Település</label><input type="text" id="regBillingCity" required placeholder="Tök"></div>
-      </div>
-      <div class="field"><label for="regBillingAddress">Utca, házszám</label><input type="text" id="regBillingAddress" required placeholder="Ady Endre utca 27."></div>
-      <div class="field"><label for="regTaxNumber">Adószám (ha van)</label><input type="text" id="regTaxNumber" placeholder="Magánszemélyként üresen hagyható"></div>
+      <p class="muted" style="margin-bottom:14px;">Számlázási adatok — <strong>nem kötelező most kitölteni.</strong> Csak akkor van rájuk szükség, ha számlát kérsz; a Profil fülön bármikor megadhatod és módosíthatod.</p>
+      <div id="regBillingFields"></div>
       <button type="submit" class="btn btn-primary btn-block">Fiók létrehozása</button>
       <p class="muted" style="margin-top:12px;font-size:0.78rem;text-align:center;">A regisztrációval elfogadod <a href="index.html#adatvedelem" onclick="window.open('adatvedelem.html','_blank');return false;" style="color:var(--teal);">adatkezelési tájékoztatónkat</a>.</p>
     </form>
@@ -305,7 +299,7 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 function uid(prefix){ return prefix + '_' + Math.random().toString(36).slice(2,9); }
 
 /* Memóriában tartott, a nézetek által olvasott "gyorsítótár" — refreshDB() tölti fel Supabase-ből. */
-let db = { users:[], therapists:[], rooms:[], serviceTypes:[], packages:[], slots:[], bookings:[], assignments:[], vatRates:[] };
+let db = { users:[], therapists:[], rooms:[], serviceTypes:[], packages:[], slots:[], bookings:[], assignments:[], roster:[], vatRates:[] };
 let currentProfile = null;
 let dbReady = false;
 
@@ -362,11 +356,30 @@ async function refreshDB(){
   });
   db.users = profiles.map(p=>({
     id:p.id, role:p.role, name:p.name, phone:p.phone||'', createdAt:p.created_at||null,
-    billingName:p.billing_name||'', billingAddress:p.billing_address||'', billingZip:p.billing_zip||'', billingCity:p.billing_city||'', taxNumber:p.tax_number||'',
+    billingType:p.billing_type||'private', billingName:p.billing_name||'', billingAddress:p.billing_address||'', billingZip:p.billing_zip||'', billingCity:p.billing_city||'', taxNumber:p.tax_number||'',
     children: p.role==='parent' ? childrenRows.filter(c=>c.parent_id===p.id).map(c=>({id:c.id, name:c.name, birthDate:c.birth_date})).sort(byNameHu) : [],
   })).sort(byNameHu);
   db.therapists.sort(byNameHu);
   db.assignments = (clientsRes.data||[]).map(a=>({ id:a.id, therapistId:a.therapist_id, parentId:a.parent_id }));
+
+  /* Teljes szülő + gyermek névsor a hozzárendeléshez (sql_patch19).
+     Csak nevet és születési dátumot ad vissza, és csak adminnak/terapeutának —
+     ebből tudja a terapeuta kiválasztani, kit rendel magához. A többi adat
+     továbbra is csak a hozzárendelés után látszik. */
+  db.roster = [];
+  const rosterRes = await sb.rpc('assignment_roster');
+  if(!rosterRes.error && rosterRes.data){
+    const byParent = new Map();
+    rosterRes.data.forEach(r=>{
+      if(!byParent.has(r.parent_id)){
+        byParent.set(r.parent_id, { id:r.parent_id, name:r.parent_name, phone:r.parent_phone||'', createdAt:r.parent_created_at||null, children:[] });
+      }
+      if(r.child_id) byParent.get(r.parent_id).children.push({ id:r.child_id, name:r.child_name, birthDate:r.child_birth_date });
+    });
+    db.roster = Array.from(byParent.values());
+    db.roster.forEach(p=>p.children.sort(byNameHu));
+    db.roster.sort(byNameHu);
+  }
   db.vatRates = (vatRes.data||[]).map(v=>({ id:v.id, percent:v.percent, label:v.label||'' })).sort((a,b)=>a.percent-b.percent);
 }
 
@@ -471,19 +484,113 @@ let calWeekStart = startOfWeek(new Date());
 /* Teremszűrő — üres halmaz = minden terem látszik. Egy- és többszörös
    kiválasztást is támogat, minden naptár nézetnél (szülő, admin, terapeuta). */
 let roomFilter = new Set();
-function renderRoomFilterBar(){
-  const allActive = roomFilter.size===0;
-  const allPill = `<button type="button" class="room-filter-pill ${allActive?'active':''}" data-room-filter-all>Összes terem</button>`;
-  const roomPills = db.rooms.map(r=>{
-    const active = roomFilter.has(r.id);
-    return `<button type="button" class="room-filter-pill ${active?'active':''}" data-room-filter="${r.id}"><span class="dot" style="background:${r.color}"></span>${r.name}</button>`;
-  }).join('');
-  return `<div class="room-filter-bar">${allPill}${roomPills}</div>`;
+/* Terapeutaszűrő — ugyanígy működik: üres halmaz = minden terapeuta.
+   A kettő együtt is használható (pl. "Nagy tornaterem" + "Dóra"). */
+let therapistFilter = new Set();
+
+function renderRoomFilterBar(opts){
+  const showTherapists = !(opts && opts.hideTherapists);
+  const forParent = currentUser()?.role === 'parent';
+  const allRooms = roomFilter.size===0;
+  const roomPills = `<button type="button" class="room-filter-pill ${allRooms?'active':''}" data-room-filter-all>Összes terem</button>`
+    + db.rooms.map(r=>`<button type="button" class="room-filter-pill ${roomFilter.has(r.id)?'active':''}" data-room-filter="${r.id}"><span class="dot" style="background:${r.color}"></span>${r.name}</button>`).join('');
+
+  const allTher = therapistFilter.size===0;
+  const therPills = `<button type="button" class="room-filter-pill ${allTher?'active':''}" data-ther-filter-all>Összes terapeuta</button>`
+    + db.therapists.map(t=>`<button type="button" class="room-filter-pill ${therapistFilter.has(t.id)?'active':''}" data-ther-filter="${t.id}">${forParent ? therapistDisplayName(t) : t.name}</button>`).join('');
+
+  return `<div class="room-filter-bar">${roomPills}</div>`
+    + (showTherapists ? `<div class="room-filter-bar" style="margin-top:-6px;">${therPills}</div>` : '');
 }
+
+/* Mindkét szűrőt alkalmazza a naptárra. A név a régi maradt, hogy a
+   meglévő hívások ne törjenek el. */
 function applyRoomFilter(slots){
-  return roomFilter.size===0 ? slots : slots.filter(s=>roomFilter.has(s.roomId));
+  let out = roomFilter.size===0 ? slots : slots.filter(s=>roomFilter.has(s.roomId));
+  if(therapistFilter.size>0) out = out.filter(s=>s.therapistId && therapistFilter.has(s.therapistId));
+  return out;
 }
 let rentalFilter = { from:'', to:'', therapistId:'', roomId:'' };
+/* Keresőmező a terapeuta "szülő hozzárendelése" listájához. */
+let parentSearch = '';
+
+/* =========================================================
+   SZÁMLÁZÁSI ADATOK — közös űrlapblokk (regisztráció + profil)
+   A mezők pontosan azok, amiket a Számlázz.hu a <vevo> blokkban vár:
+   nev / irsz / telepules / cim / adoszam.
+   ========================================================= */
+/* Magyar adószám: 8 számjegy - 1 áfakód - 2 megyekód (pl. 12345678-2-13).
+   Elfogadjuk szóköz/kötőjel nélkül is, és mi tesszük bele a kötőjeleket. */
+function normalizeTaxNumber(raw){
+  const digits = (raw||'').replace(/\D/g,'');
+  if(digits.length !== 11) return null;
+  return digits.slice(0,8) + '-' + digits.slice(8,9) + '-' + digits.slice(9,11);
+}
+
+/* prefix: a mezők id-előtagja ('reg' vagy 'prof'), hogy a két űrlap
+   ne ütközzön egymással. u: a meglévő adatok (profil szerkesztésénél). */
+function billingFieldsMarkup(prefix, u, opts){
+  const b = u || {};
+  const optional = !!(opts && opts.optional);
+  const req = optional ? '' : 'required';
+  const isCompany = b.billingType === 'company';
+  return `
+    <div class="field"><label for="${prefix}BillingType">Számlázási mód</label>
+      <select id="${prefix}BillingType">
+        <option value="private" ${!isCompany?'selected':''}>Magánszemély</option>
+        <option value="company" ${isCompany?'selected':''}>Cég / egyéni vállalkozó</option>
+      </select></div>
+    <div class="field"><label for="${prefix}BillingName">Számlázási név</label><input type="text" id="${prefix}BillingName" value="${b.billingName||''}" ${req} placeholder="Cégnél a cég hivatalos neve"></div>
+    <div class="field-row">
+      <div class="field"><label for="${prefix}BillingZip">Irányítószám</label><input type="text" id="${prefix}BillingZip" value="${b.billingZip||''}" ${req} placeholder="2073" inputmode="numeric" maxlength="4"></div>
+      <div class="field"><label for="${prefix}BillingCity">Település</label><input type="text" id="${prefix}BillingCity" value="${b.billingCity||''}" ${req} placeholder="Tök"></div>
+    </div>
+    <div class="field"><label for="${prefix}BillingAddress">Utca, házszám</label><input type="text" id="${prefix}BillingAddress" value="${b.billingAddress||''}" ${req} placeholder="Ady Endre utca 27."></div>
+    <div class="field" id="${prefix}TaxWrap" style="display:${isCompany?'block':'none'};">
+      <label for="${prefix}TaxNumber">Adószám</label>
+      <input type="text" id="${prefix}TaxNumber" value="${b.taxNumber||''}" placeholder="12345678-2-13" inputmode="numeric">
+      <p class="muted" style="margin:6px 0 0;font-size:0.8rem;">Cégre kiállított számlán az adószám kötelező. Kötőjelek nélkül is beírhatod.</p>
+    </div>`;
+}
+
+/* A "Számlázási mód" választó mutatja/rejti az adószám mezőt. */
+function attachBillingTypeToggle(prefix){
+  const sel = document.getElementById(prefix+'BillingType');
+  const wrap = document.getElementById(prefix+'TaxWrap');
+  if(!sel || !wrap) return;
+  sel.addEventListener('change', ()=>{ wrap.style.display = sel.value==='company' ? 'block' : 'none'; });
+}
+
+/* Kiolvassa és ellenőrzi az űrlapot. Hiba esetén null-t ad vissza
+   (és kiírja a hibát), különben a mentésre kész objektumot. */
+function readBillingForm(prefix, opts){
+  const optional = !!(opts && opts.optional);
+  const billingType = document.getElementById(prefix+'BillingType').value;
+  const billingName = document.getElementById(prefix+'BillingName').value.trim();
+  const billingZip = document.getElementById(prefix+'BillingZip').value.trim();
+  const billingCity = document.getElementById(prefix+'BillingCity').value.trim();
+  const billingAddress = document.getElementById(prefix+'BillingAddress').value.trim();
+  const taxRaw = (document.getElementById(prefix+'TaxNumber')?.value || '').trim();
+  const anyFilled = billingName || billingZip || billingCity || billingAddress || taxRaw;
+
+  /* Regisztrációnál a számlázási adatok elhagyhatók — ilyenkor üresen megy
+     tovább, és a szülő később a Profil fülön pótolja. */
+  if(optional && !anyFilled){
+    return { billing_type: billingType, billing_name: '', billing_zip: '', billing_city: '', billing_address: '', tax_number: null };
+  }
+  if(!billingName || !billingZip || !billingCity || !billingAddress){
+    toast('Ha megadod a számlázási adatokat, a név, az irányítószám, a település és a cím is kell.');
+    return null;
+  }
+  if(!/^\d{4}$/.test(billingZip)){ toast('Az irányítószám 4 számjegy legyen (pl. 2073).'); return null; }
+  let taxNumber = null;
+  if(billingType === 'company'){
+    if(!taxRaw){ toast('Cégre szóló számlához kötelező az adószám.'); return null; }
+    taxNumber = normalizeTaxNumber(taxRaw);
+    if(!taxNumber){ toast('Az adószám 11 számjegy legyen, pl. 12345678-2-13.'); return null; }
+  }
+  return { billing_type: billingType, billing_name: billingName, billing_zip: billingZip, billing_city: billingCity, billing_address: billingAddress, tax_number: taxNumber };
+}
 
 /* Egy heti naptárrács renderelése. slots: az adott héten megjelenítendő időpontok.
    opts.actionRenderer(slot, full, isPast) -> HTML string a slot kártya aljára.
@@ -656,15 +763,12 @@ registerForm.addEventListener('submit', async (e)=>{
   const email = document.getElementById('regEmail').value.trim().toLowerCase();
   const phone = document.getElementById('regPhone').value.trim();
   const pass = document.getElementById('regPass').value;
-  const billingName = document.getElementById('regBillingName').value.trim();
-  const billingAddress = document.getElementById('regBillingAddress').value.trim();
-  const billingZip = document.getElementById('regBillingZip').value.trim();
-  const billingCity = document.getElementById('regBillingCity').value.trim();
-  const taxNumber = document.getElementById('regTaxNumber').value.trim();
+  const billing = readBillingForm('reg', { optional:true });
+  if(!billing) return;
   const submitBtn = registerForm.querySelector('button[type="submit"]'); submitBtn.disabled = true;
   const { data, error } = await sb.auth.signUp({
     email, password: pass,
-    options: { data: { name, phone, billing_name: billingName, billing_zip: billingZip, billing_city: billingCity, billing_address: billingAddress, tax_number: taxNumber || null }, emailRedirectTo: window.location.origin + window.location.pathname },
+    options: { data: { name, phone, ...billing }, emailRedirectTo: window.location.origin + window.location.pathname },
   });
   submitBtn.disabled = false;
   if(error){ showAuthError(error.message.includes('registered') ? 'Ez az e-mail cím már regisztrálva van.' : error.message); return; }
@@ -701,7 +805,7 @@ function boot(){
   document.getElementById('logoutBtn').addEventListener('click', logout);
 
   const tabsByRole = {
-    parent: [['book','Naptár & Foglalás'],['mybookings','Foglalásaim'],['children','Gyermekeim'],['packages','Bérletem']],
+    parent: [['book','Naptár & Foglalás'],['mybookings','Foglalásaim'],['children','Gyermekeim'],['packages','Bérletem'],['profile','Profil & számlázás']],
     therapist: [['calendar','Csapatnaptár'],['announce','Saját órák kiírása'],['payments','Fizetések'],['packages','Bérletek'],['manage_parents','Szülők / Felhasználók']],
     admin: [['calendar','Naptár'],['manage_bookings','Foglalások / fizetések'],['manage_packages','Bérletek'],['manage_parents','Szülők / Felhasználók'],['manage_therapists','Terapeuták'],['manage_rooms','Helyiségek'],['manage_services','Szolgáltatások & árak'],['rental','Terembérleti díjak']],
   };
@@ -723,6 +827,7 @@ function renderView(user, tab){
     if(tab==='mybookings') root.innerHTML = viewMyBookings(user);
     if(tab==='children') root.innerHTML = viewChildren(user);
     if(tab==='packages') root.innerHTML = viewPackages(user);
+    if(tab==='profile') root.innerHTML = viewParentProfile(user);
   }
   if(user.role==='therapist'){
     if(tab==='calendar') root.innerHTML = viewTherapistTeamCalendar(user);
@@ -742,6 +847,31 @@ function renderView(user, tab){
     if(tab==='rental') root.innerHTML = viewAdminRoomRental(user);
   }
   attachViewHandlers(user, tab);
+}
+
+/* =========================================================
+   SZÜLŐ: PROFIL & SZÁMLÁZÁSI ADATOK
+   ========================================================= */
+function viewParentProfile(user){
+  const incomplete = !user.billingName || !user.billingZip || !user.billingCity || !user.billingAddress
+    || (user.billingType==='company' && !user.taxNumber);
+  return `<div class="card" style="margin-bottom:24px;">
+    <h3 class="section-title">Kapcsolattartási adatok</h3>
+    <form id="profileContactForm">
+      <div class="field"><label for="profName">Teljes név</label><input type="text" id="profName" value="${user.name||''}" required></div>
+      <div class="field"><label for="profPhone">Telefonszám</label><input type="tel" id="profPhone" value="${user.phone||''}" required></div>
+      <button type="submit" class="btn btn-primary btn-block" style="margin-top:8px;">Mentés</button>
+    </form>
+  </div>
+  <div class="card">
+    <h3 class="section-title">Számlázási adatok</h3>
+    ${incomplete ? '<p class="pill" style="background:#FDF0E2;color:#A25A18;display:inline-block;margin-bottom:14px;">Hiányos — enélkül nem tudunk számlát kiállítani</p>' : ''}
+    <p class="muted" style="margin-bottom:16px;">Ezek az adatok kerülnek a számlára. Bármikor módosíthatod — a módosítás a jövőben kiállított számlákra vonatkozik, a már kiállítottakat nem érinti.</p>
+    <form id="profileBillingForm">
+      ${billingFieldsMarkup('prof', user)}
+      <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">Mentés</button>
+    </form>
+  </div>`;
 }
 
 /* =========================================================
@@ -1303,7 +1433,7 @@ function viewTherapistAnnounce(user){
       </form>
     </div>
   </div>
-    <div class="card"><h3 class="section-title">Saját meghirdetett óráim</h3>${renderRoomFilterBar()}${calendar}</div>`;
+    <div class="card"><h3 class="section-title">Saját meghirdetett óráim</h3>${renderRoomFilterBar({hideTherapists:true})}${calendar}</div>`;
 }
 
 function openOwnServiceModal(user, serviceId){
@@ -1369,12 +1499,12 @@ function viewTherapistPayments(user){
   // Számlázási adatok — azokról a szülőkről, akiknek foglalásuk van a saját óráidon
   const billParents = Array.from(new Set(mine.map(b=>b.parentId))).map(userOf).filter(Boolean).sort(byNameHu);
   const billRows = billParents.map(p=>{
-    const missing = !p.billingName || !p.billingAddress;
+    const missing = !p.billingName || !p.billingZip || !p.billingCity || !p.billingAddress || (p.billingType==='company' && !p.taxNumber);
     return `<tr>
       <td>${p.name}</td>
       <td>${p.billingName || '<span class="muted">nincs megadva</span>'}</td>
       <td>${p.billingAddress || '<span class="muted">nincs megadva</span>'}</td>
-      <td>${p.taxNumber || '<span class="muted">—</span>'}</td>
+      <td>${p.billingType==='company' ? (p.taxNumber || '<span class="muted">hiányzik</span>') : '<span class="muted">magánszemély</span>'}</td>
       <td>${missing ? '<span class="status-badge status-pending">Hiányos</span>' : '<span class="status-badge status-confirmed">Rendben</span>'}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="5" class="muted">Még nincs foglalás a saját óráidra.</td></tr>';
@@ -1485,18 +1615,36 @@ function viewAdminParents(user){
     return `<tr><td>${p.name}</td><td>${p.phone||'—'}</td><td>${childRows}</td><td>${assignCell}</td><td><button class="btn btn-ghost btn-sm" data-add-child-for="${p.id}">+ Gyermek hozzáadása</button></td></tr>`;
   }).join('') || `<tr><td colspan="5" class="muted">${isAdmin ? 'Nincs regisztrált szülő.' : 'Még nincs hozzád rendelt szülő — lent tudsz magadhoz rendelni.'}</td></tr>`;
 
-  // Új / még nem hozzám rendelt szülők — a terapeuta innen tud magához rendelni
-  const claimable = db.users.filter(u=>u.role==='parent' && !parents.some(p=>p.id===u.id));
+  /* Teljes névsor a hozzárendeléshez — a terapeuta BÁRMELYIK szülőt
+     magához rendelheti, nem csak azokat, akik már jártak nála.
+     A gyermekek neve is látszik, mert egy gyermek több foglalkozásra is járhat. */
+  const assignedIds = new Set([
+    ...db.assignments.filter(a=>a.therapistId===user.id).map(a=>a.parentId),
+    ...parents.map(p=>p.id),   // aki már a felső táblában szerepel, ide ne kerüljön be újra
+  ]);
+  const rosterAll = (db.roster.length ? db.roster : db.users.filter(u=>u.role==='parent'));
+  const q = parentSearch.trim().toLowerCase();
+  const claimable = rosterAll.filter(p=>{
+    if(assignedIds.has(p.id)) return false;
+    if(!q) return true;
+    return p.name.toLowerCase().includes(q)
+      || (p.phone||'').toLowerCase().includes(q)
+      || (p.children||[]).some(c=>c.name.toLowerCase().includes(q));
+  });
   const claimRows = claimable.map(p=>{
-    const since = p.createdAt ? ` <span class="muted" style="font-size:0.74rem;">(${fmtDate(p.createdAt)})</span>` : '';
-    return `<tr><td>${p.name}${since}</td><td>${p.phone||'—'}</td>
+    const since = p.createdAt ? ` <span class="muted" style="font-size:0.74rem;">(reg.: ${fmtDate(p.createdAt)})</span>` : '';
+    const kids = (p.children||[]).length
+      ? p.children.map(c=>`<div style="margin-bottom:4px;">${c.name}${c.birthDate?` <span class="muted" style="font-size:0.76rem;">(${c.birthDate})</span>`:''}</div>`).join('')
+      : '<span class="muted">nincs rögzített gyermek</span>';
+    return `<tr><td>${p.name}${since}</td><td>${p.phone||'—'}</td><td>${kids}</td>
       <td><button class="btn btn-primary btn-sm" data-assign-parent="${p.id}">Magamhoz rendelem</button></td></tr>`;
-  }).join('') || '<tr><td colspan="3" class="muted">Nincs ilyen szülő — mindenki hozzád van rendelve.</td></tr>';
+  }).join('') || `<tr><td colspan="4" class="muted">${q ? 'Nincs a keresésnek megfelelő találat.' : 'Nincs ilyen szülő — mindenki hozzád van rendelve.'}</td></tr>`;
 
   const claimCard = isAdmin ? '' : `<div class="card" style="margin-top:24px;">
-    <h3 class="section-title">Új szülők / felhasználók</h3>
-    <p class="muted" style="margin-bottom:16px;">Itt jelennek meg azok, akik regisztráltak, de még nincsenek hozzád rendelve. Ha magadhoz rendeled, onnantól látod a gyermekeit, és tudsz nekik bérletet és foglalást rögzíteni.</p>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Szülő / Felhasználó</th><th>Telefon</th><th></th></tr></thead><tbody>${claimRows}</tbody></table></div>
+    <h3 class="section-title">Szülő / felhasználó hozzárendelése magamhoz</h3>
+    <p class="muted" style="margin-bottom:16px;">Itt a rendszer összes szülője és gyermeke szerepel, aki még nincs hozzád rendelve — bárkit magadhoz rendelhetsz, akkor is, ha még sosem járt nálad. A hozzárendelés után látod a gyermekei adatait, és tudsz nekik bérletet és foglalást rögzíteni. Egy szülő egyszerre több terapeutához is tartozhat.</p>
+    <div class="field" style="max-width:340px;"><label for="parentSearch">Keresés (szülő, gyermek vagy telefon)</label><input type="search" id="parentSearch" value="${parentSearch}" placeholder="pl. Kovács vagy Bence"></div>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Szülő / Felhasználó</th><th>Telefon</th><th>Gyermekei</th><th></th></tr></thead><tbody>${claimRows}</tbody></table></div>
   </div>`;
 
   return `<div class="card">
@@ -1684,7 +1832,8 @@ function openInvoiceModal(kind, id){
   const service = slot ? serviceOf(slot.serviceTypeId) : null;
   const parent = userOf(isBooking ? b.parentId : pkg.userId);
   const amount = isBooking ? (service?service.price:0) : (pkg.price||0);
-  const missing = !parent?.billingName || !parent?.billingZip || !parent?.billingCity || !parent?.billingAddress;
+  const missing = !parent?.billingName || !parent?.billingZip || !parent?.billingCity || !parent?.billingAddress
+    || (parent?.billingType==='company' && !parent?.taxNumber);
   const vatOpts = db.vatRates.map(v=>`<option value="${v.percent}" ${v.percent===0?'selected':''}>${v.percent}%${v.label?' · '+v.label:''}</option>`).join('')
     || '<option value="0">0%</option>';
   const defaultFulfil = isBooking
@@ -2104,6 +2253,43 @@ function attachViewHandlers(user, tab){
   root.querySelectorAll('[data-leave-waitlist]').forEach(btn=>{
     btn.addEventListener('click', ()=> leaveWaitlist(btn.dataset.leaveWaitlist, btn.dataset.child || null));
   });
+  const profileContactForm = document.getElementById('profileContactForm');
+  if(profileContactForm) profileContactForm.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const name = document.getElementById('profName').value.trim();
+    const phone = document.getElementById('profPhone').value.trim();
+    if(!name){ toast('A név nem lehet üres.'); return; }
+    const { error } = await sb.from('profiles').update({ name, phone }).eq('id', user.id);
+    if(error){ toast('Hiba: ' + error.message); return; }
+    toast('Adatok mentve.'); await loadProfile(user.id); await refreshDB(); boot();
+  });
+
+  const profileBillingForm = document.getElementById('profileBillingForm');
+  if(profileBillingForm){
+    attachBillingTypeToggle('prof');
+    profileBillingForm.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const billing = readBillingForm('prof');
+      if(!billing) return;
+      const { error } = await sb.from('profiles').update(billing).eq('id', user.id);
+      if(error){ toast('Hiba: ' + error.message); return; }
+      toast('Számlázási adatok mentve.'); await refreshDB(); boot();
+    });
+  }
+
+  const parentSearchInput = document.getElementById('parentSearch');
+  if(parentSearchInput){
+    let t;
+    parentSearchInput.addEventListener('input', (e)=>{
+      parentSearch = e.target.value;
+      clearTimeout(t);
+      t = setTimeout(()=>{
+        boot();
+        const el = document.getElementById('parentSearch');
+        if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+      }, 250);
+    });
+  }
   root.querySelectorAll('[data-assign-parent]').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
       const { error } = await sb.from('therapist_clients').insert({ therapist_id: user.id, parent_id: btn.dataset.assignParent });
@@ -2310,6 +2496,12 @@ function attachViewHandlers(user, tab){
     boot();
   }));
   root.querySelectorAll('[data-room-filter-all]').forEach(btn=>btn.addEventListener('click', ()=>{ roomFilter.clear(); boot(); }));
+  root.querySelectorAll('[data-ther-filter]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const id = btn.dataset.therFilter;
+    if(therapistFilter.has(id)) therapistFilter.delete(id); else therapistFilter.add(id);
+    boot();
+  }));
+  root.querySelectorAll('[data-ther-filter-all]').forEach(btn=>btn.addEventListener('click', ()=>{ therapistFilter.clear(); boot(); }));
 
   // admin: terapeuták CRUD
   root.querySelectorAll('[data-add-therapist]').forEach(btn=>btn.addEventListener('click', ()=>openTherapistModal('add')));
@@ -2342,6 +2534,13 @@ document.addEventListener('click', (e)=>{
    INDÍTÁS
    ========================================================= */
 async function init(){
+  /* A regisztrációs űrlap számlázási blokkja ugyanabból a sablonból
+     épül fel, mint a profilé — így a két helyen nem csúszhatnak el egymástól. */
+  const regBillingWrap = document.getElementById('regBillingFields');
+  if(regBillingWrap){
+    regBillingWrap.innerHTML = billingFieldsMarkup('reg', null, { optional:true });
+    attachBillingTypeToggle('reg');
+  }
   const { data: { session } } = await sb.auth.getSession();
   if(session){
     await loadProfile(session.user.id);
