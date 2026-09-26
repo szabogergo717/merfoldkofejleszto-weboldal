@@ -405,6 +405,7 @@ function fmtDateTimeFull(iso){
   return d.getFullYear()+'.'+p(d.getMonth()+1)+'.'+p(d.getDate())+'. '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
 }
 function roomOf(id){ return db.rooms.find(r=>r.id===id); }
+function slotOf(id){ return db.slots.find(s=>s.id===id); }
 function serviceOf(id){ return db.serviceTypes.find(s=>s.id===id); }
 function therapistOf(id){ return db.therapists.find(t=>t.id===id); }
 /* A szülő a terapeuta keresztnevét (vagy a terapeuta által megadott
@@ -1252,10 +1253,12 @@ function viewTherapistAnnounce(user){
   const calendar = renderWeekCalendar(ownSlots, {
     showTherapist:false,
     showParticipants:true,
-    actionRenderer: (s) => `<button class="btn btn-primary btn-sm cal-slot-btn" data-admin-book-slot="${s.id}" style="margin-bottom:4px;">Foglalás felvétele</button><button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
+    actionRenderer: (s) => `<button class="btn btn-primary btn-sm cal-slot-btn" data-admin-book-slot="${s.id}" style="margin-bottom:4px;">Foglalás felvétele</button><button class="btn btn-ghost btn-sm cal-slot-btn" data-edit-slot-capacity="${s.id}" style="margin-bottom:4px;">Létszám</button><button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
   });
   const ownServices = db.serviceTypes.filter(s=>s.therapistId===user.id);
-  const roomOpts = db.rooms.filter(r=>r.needsTherapist).map(r=>`<option value="${r.id}">${r.name} (max ${r.capacity} fő)</option>`).join('');
+  const therRooms = db.rooms.filter(r=>r.needsTherapist);
+  const roomOpts = therRooms.map(r=>`<option value="${r.id}">${r.name} (max ${r.capacity} fő)</option>`).join('');
+  const firstRoomCap = therRooms.length ? therRooms[0].capacity : 1;
   const serviceOpts = ownServices.map(s=>`<option value="${s.id}">${s.name} — ${fmtHUF(s.price)}</option>`).join('')
     || '<option value="" disabled selected>Előbb vegyél fel egy saját foglalkozást lent</option>';
   const recurOpts = recurCountOptions();
@@ -1281,6 +1284,7 @@ function viewTherapistAnnounce(user){
         <div class="field"><label for="slotDuration">Időtartam (perc)</label><input type="number" id="slotDuration" value="45" min="10" required></div>
         <div class="field"><label for="slotRoom">Helyszín</label><select id="slotRoom" required>${roomOpts}</select></div>
         <div class="field"><label for="slotService">Foglalkozás típusa</label><select id="slotService" required>${serviceOpts}</select></div>
+        <div class="field"><label for="slotCapacity">Max létszám erre a foglalkozásra (fő)</label><input type="number" id="slotCapacity" min="1" max="${firstRoomCap}" value="${firstRoomCap}" required><p class="muted" id="slotCapacityHint" style="margin:6px 0 0;font-size:0.82rem;">A terem befogadóképessége: max ${firstRoomCap} fő. Ennél kevesebbet is megadhatsz, ha kisebb létszámmal szeretnéd tartani.</p></div>
         <div class="field"><label for="slotRecurCount">Hányszor (heti ismétlődéssel)</label><select id="slotRecurCount">${recurOpts}</select></div>
         <p class="muted" style="margin-bottom:14px;">A Masszázsfotel és a Masszázs szolgáltatás nem választható terapeuta fiókból — azokat az admin hirdeti meg.</p>
         <button type="submit" class="btn btn-primary btn-block" ${ownServices.length===0?'disabled':''}>Meghirdetés</button>
@@ -1386,6 +1390,7 @@ function viewTherapistPayments(user){
    ========================================================= */
 function viewAdminCalendar(user){
   const roomOpts = db.rooms.map(r=>`<option value="${r.id}">${r.name} (max ${r.capacity} fő)</option>`).join('');
+  const firstRoomCap = db.rooms.length ? db.rooms[0].capacity : 1;
   const therOpts = '<option value="">— nincs (pl. Masszázsfotel) —</option>' + db.therapists.map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
   const serviceOpts = db.serviceTypes.map(s=>{
     const ther = s.therapistId ? therapistOf(s.therapistId) : null;
@@ -1394,7 +1399,7 @@ function viewAdminCalendar(user){
   const calendar = renderWeekCalendar(applyRoomFilter(db.slots), {
     showParticipants:true,
     allowRemove:true,
-    actionRenderer: (s) => `<button class="btn btn-primary btn-sm cal-slot-btn" data-admin-book-slot="${s.id}" style="margin-bottom:4px;">Foglalás felvétele</button><button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
+    actionRenderer: (s) => `<button class="btn btn-primary btn-sm cal-slot-btn" data-admin-book-slot="${s.id}" style="margin-bottom:4px;">Foglalás felvétele</button><button class="btn btn-ghost btn-sm cal-slot-btn" data-edit-slot-capacity="${s.id}" style="margin-bottom:4px;">Létszám</button><button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
   });
 
   return `<div class="grid-2" style="margin-bottom:24px;">
@@ -1405,6 +1410,7 @@ function viewAdminCalendar(user){
         <div class="field"><label for="slotRoom">Helyszín</label><select id="slotRoom" required>${roomOpts}</select></div>
         <div class="field"><label for="slotTherapist">Terapeuta</label><select id="slotTherapist">${therOpts}</select></div>
         <div class="field"><label for="slotService">Foglalkozás típusa</label><select id="slotService" required>${serviceOpts}</select></div>
+        <div class="field"><label for="slotCapacity">Max létszám erre a foglalkozásra (fő)</label><input type="number" id="slotCapacity" min="1" max="${firstRoomCap}" value="${firstRoomCap}" required><p class="muted" id="slotCapacityHint" style="margin:6px 0 0;font-size:0.82rem;">A terem befogadóképessége: max ${firstRoomCap} fő. Ennél kevesebbet is megadhatsz, ha kisebb létszámmal szeretnéd tartani.</p></div>
         <div class="field"><label for="slotRecurCount">Hányszor (heti ismétlődéssel)</label><select id="slotRecurCount">${recurCountOptions()}</select></div>
         <button type="submit" class="btn btn-primary btn-block">Meghirdetés</button>
       </form>
@@ -2021,6 +2027,40 @@ function openModal(html){
   document.getElementById('modalOverlay').classList.add('open');
 }
 function closeModal(){ document.getElementById('modalOverlay').classList.remove('open'); }
+
+/* =========================================================
+   EGY ADOTT FOGLALKOZÁS MAX LÉTSZÁMÁNAK MÓDOSÍTÁSA
+   (admin és terapeuta — utóbbi csak a saját óráinál)
+   ========================================================= */
+function openSlotCapacityModal(slotId){
+  const s = slotOf(slotId);
+  if(!s){ toast('Az időpont nem található.'); return; }
+  const room = roomOf(s.roomId);
+  const roomMax = room ? room.capacity : s.capacity;
+  const service = serviceOf(s.serviceTypeId);
+  openModal(`<h3 class="section-title">Max létszám módosítása</h3>
+    <div class="pay-detail-box" style="margin-bottom:16px;">
+      <div><span>Foglalkozás</span><span><strong>${service ? service.name : '—'}</strong></span></div>
+      <div><span>Időpont</span><span>${fmtDate(s.date)}</span></div>
+      <div><span>Helyszín</span><span>${room ? room.name : '—'}</span></div>
+      <div><span>Jelenleg foglalt</span><span>${s.bookedCount} fő</span></div>
+    </div>
+    <form id="slotCapacityForm">
+      <div class="field"><label for="slotCapacityNew">Max létszám (fő)</label><input type="number" id="slotCapacityNew" min="1" max="${roomMax}" value="${s.capacity}" required>
+        <p class="muted" style="margin:6px 0 0;font-size:0.82rem;">A terem befogadóképessége: max ${roomMax} fő. A már felvett ${s.bookedCount} főnél kevesebbet nem lehet beállítani.</p></div>
+      <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">Mentés</button>
+    </form>`);
+  document.getElementById('slotCapacityForm').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const val = parseInt(document.getElementById('slotCapacityNew').value,10);
+    if(!val || val < 1){ toast('Adj meg legalább 1 fős létszámot.'); return; }
+    if(val > roomMax){ toast(`Ebbe a terembe legfeljebb ${roomMax} fő fér be.`); return; }
+    if(val < s.bookedCount){ toast(`Erre az alkalomra már ${s.bookedCount} fő van felvéve — előbb töröld a foglalás(oka)t.`); return; }
+    const { error } = await sb.from('slots').update({ capacity: val }).eq('id', s.id);
+    if(error){ toast('Hiba: ' + error.message); return; }
+    closeModal(); toast('A max létszám módosítva.'); await refreshDB(); boot();
+  });
+}
 document.getElementById('modalOverlay').addEventListener('click', (e)=>{ if(e.target.id==='modalOverlay') closeModal(); });
 
 /* =========================================================
@@ -2044,6 +2084,9 @@ function attachViewHandlers(user, tab){
   });
   root.querySelectorAll('[data-admin-book-slot]').forEach(btn=>{
     btn.addEventListener('click', ()=> openAdminBookModal(btn.dataset.adminBookSlot));
+  });
+  root.querySelectorAll('[data-edit-slot-capacity]').forEach(btn=>{
+    btn.addEventListener('click', ()=> openSlotCapacityModal(btn.dataset.editSlotCapacity));
   });
   root.querySelectorAll('[data-add-child-for]').forEach(btn=>{
     btn.addEventListener('click', ()=> openAddChildForParentModal(btn.dataset.addChildFor));
@@ -2210,6 +2253,20 @@ function attachViewHandlers(user, tab){
     document.getElementById('rentalRoom').addEventListener('change', (e)=>{ rentalFilter.roomId = e.target.value; boot(); });
   }
 
+  /* Teremváltáskor a max létszám mező korlátja és értéke a terem
+     befogadóképességéhez igazodik (a kézzel beírt kisebb érték megmarad). */
+  const slotRoomSelect = document.getElementById('slotRoom');
+  const slotCapacityInput = document.getElementById('slotCapacity');
+  if(slotRoomSelect && slotCapacityInput) slotRoomSelect.addEventListener('change', ()=>{
+    const room = roomOf(slotRoomSelect.value);
+    if(!room) return;
+    const prev = parseInt(slotCapacityInput.value,10);
+    slotCapacityInput.max = room.capacity;
+    if(!prev || prev > room.capacity) slotCapacityInput.value = room.capacity;
+    const hint = document.getElementById('slotCapacityHint');
+    if(hint) hint.textContent = `A terem befogadóképessége: max ${room.capacity} fő. Ennél kevesebbet is megadhatsz, ha kisebb létszámmal szeretnéd tartani.`;
+  });
+
   const addSlotForm = document.getElementById('addSlotForm');
   if(addSlotForm) addSlotForm.addEventListener('submit', async (e)=>{
     e.preventDefault();
@@ -2229,13 +2286,18 @@ function attachViewHandlers(user, tab){
     const startDate = new Date(document.getElementById('slotDate').value);
     const duration = parseInt(document.getElementById('slotDuration').value,10);
     const recurCount = parseInt(document.getElementById('slotRecurCount')?.value || '1', 10);
+    /* Foglalkozásonkénti max létszám — alapból a terem kapacitása, de
+       kisebbre állítható. A teremnél nagyobb érték nem engedhető meg. */
+    const capacity = parseInt(document.getElementById('slotCapacity')?.value || String(room.capacity), 10);
+    if(!capacity || capacity < 1){ toast('Adj meg legalább 1 fős létszámot.'); return; }
+    if(capacity > room.capacity){ toast(`Ebbe a terembe legfeljebb ${room.capacity} fő fér be.`); return; }
     const newSlots = [];
     for(let i=0; i<recurCount; i++){
       const d = new Date(startDate.getTime() + i*7*24*60*60*1000);
       newSlots.push({
         date: d.toISOString(), duration,
         room_id: roomId, therapist_id: therapistId, service_type_id: serviceTypeId,
-        capacity: room.capacity,
+        capacity,
       });
     }
     const { error } = await sb.from('slots').insert(newSlots);
