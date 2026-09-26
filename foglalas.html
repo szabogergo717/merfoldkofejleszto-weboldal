@@ -343,7 +343,9 @@ async function refreshDB(){
   const occupancy = {};
   if(!occRes.error && occRes.data) occRes.data.forEach(r=>{ occupancy[r.slot_id] = r.booked; });
 
-  db.rooms = (roomsRes.data||[]).map(r=>({ id:r.id, name:r.name, capacity:r.capacity, color:r.color, needsTherapist:r.needs_therapist, rentalFee:r.rental_fee||0, rentalFeeGroup:r.rental_fee_group||0 }));
+  /* A helyiségnek NINCS saját kapacitása — a max létszámot minden
+     foglalkozás kiírásakor külön kell megadni (slots.capacity). */
+  db.rooms = (roomsRes.data||[]).map(r=>({ id:r.id, name:r.name, color:r.color, needsTherapist:r.needs_therapist, rentalFee:r.rental_fee||0, rentalFeeGroup:r.rental_fee_group||0 }));
   db.serviceTypes = (svcRes.data||[]).map(s=>({ id:s.id, name:s.name, price:s.price, packageEligible:s.package_eligible, adminOnly:s.admin_only, therapistId:s.therapist_id||null, forSelf:s.for_self||false }));
   db.packages = (pkgRes.data||[]).map(p=>({ id:p.id, userId:p.user_id, childId:p.child_id||null, type:p.type, remaining:p.remaining, purchasedAt:p.purchased_at, expiresAt:p.expires_at||null, price:p.price||0, invoiceNumber:p.invoice_number||null, invoicePdfUrl:p.invoice_pdf_url||null }));
   db.bookings = (bookRes.data||[]).map(b=>({ id:b.id, slotId:b.slot_id, parentId:b.parent_id, childId:b.child_id, paymentMethod:b.payment_method, packageUsed:b.package_used, status:b.status, medicalCert:b.medical_cert_url, refund: b.refund_note ? {label:b.refund_note} : null, createdAt:b.created_at, cancelledAt:b.cancelled_at, invoiceRequested:b.invoice_requested||false, forSelf:b.for_self||false, invoiceNumber:b.invoice_number||null, invoicePdfUrl:b.invoice_pdf_url||null }));
@@ -1257,8 +1259,7 @@ function viewTherapistAnnounce(user){
   });
   const ownServices = db.serviceTypes.filter(s=>s.therapistId===user.id);
   const therRooms = db.rooms.filter(r=>r.needsTherapist);
-  const roomOpts = therRooms.map(r=>`<option value="${r.id}">${r.name} (max ${r.capacity} fő)</option>`).join('');
-  const firstRoomCap = therRooms.length ? therRooms[0].capacity : 1;
+  const roomOpts = therRooms.map(r=>`<option value="${r.id}">${r.name}</option>`).join('');
   const serviceOpts = ownServices.map(s=>`<option value="${s.id}">${s.name} — ${fmtHUF(s.price)}</option>`).join('')
     || '<option value="" disabled selected>Előbb vegyél fel egy saját foglalkozást lent</option>';
   const recurOpts = recurCountOptions();
@@ -1284,7 +1285,7 @@ function viewTherapistAnnounce(user){
         <div class="field"><label for="slotDuration">Időtartam (perc)</label><input type="number" id="slotDuration" value="45" min="10" required></div>
         <div class="field"><label for="slotRoom">Helyszín</label><select id="slotRoom" required>${roomOpts}</select></div>
         <div class="field"><label for="slotService">Foglalkozás típusa</label><select id="slotService" required>${serviceOpts}</select></div>
-        <div class="field"><label for="slotCapacity">Max létszám erre a foglalkozásra (fő)</label><input type="number" id="slotCapacity" min="1" max="${firstRoomCap}" value="${firstRoomCap}" required><p class="muted" id="slotCapacityHint" style="margin:6px 0 0;font-size:0.82rem;">A terem befogadóképessége: max ${firstRoomCap} fő. Ennél kevesebbet is megadhatsz, ha kisebb létszámmal szeretnéd tartani.</p></div>
+        <div class="field"><label for="slotCapacity">Max létszám erre a foglalkozásra (fő)</label><input type="number" id="slotCapacity" min="1" placeholder="pl. 1 egyéni, 4 csoportos" required><p class="muted" style="margin:6px 0 0;font-size:0.82rem;">Kötelező megadni — a helyiségnek nincs előre rögzített kapacitása, minden foglalkozásnál te döntöd el, hány fő fér be.</p></div>
         <div class="field"><label for="slotRecurCount">Hányszor (heti ismétlődéssel)</label><select id="slotRecurCount">${recurOpts}</select></div>
         <p class="muted" style="margin-bottom:14px;">A Masszázsfotel és a Masszázs szolgáltatás nem választható terapeuta fiókból — azokat az admin hirdeti meg.</p>
         <button type="submit" class="btn btn-primary btn-block" ${ownServices.length===0?'disabled':''}>Meghirdetés</button>
@@ -1389,8 +1390,7 @@ function viewTherapistPayments(user){
    ADMIN: ÓRÁK MEGHIRDETÉSE
    ========================================================= */
 function viewAdminCalendar(user){
-  const roomOpts = db.rooms.map(r=>`<option value="${r.id}">${r.name} (max ${r.capacity} fő)</option>`).join('');
-  const firstRoomCap = db.rooms.length ? db.rooms[0].capacity : 1;
+  const roomOpts = db.rooms.map(r=>`<option value="${r.id}">${r.name}</option>`).join('');
   const therOpts = '<option value="">— nincs (pl. Masszázsfotel) —</option>' + db.therapists.map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
   const serviceOpts = db.serviceTypes.map(s=>{
     const ther = s.therapistId ? therapistOf(s.therapistId) : null;
@@ -1410,7 +1410,7 @@ function viewAdminCalendar(user){
         <div class="field"><label for="slotRoom">Helyszín</label><select id="slotRoom" required>${roomOpts}</select></div>
         <div class="field"><label for="slotTherapist">Terapeuta</label><select id="slotTherapist">${therOpts}</select></div>
         <div class="field"><label for="slotService">Foglalkozás típusa</label><select id="slotService" required>${serviceOpts}</select></div>
-        <div class="field"><label for="slotCapacity">Max létszám erre a foglalkozásra (fő)</label><input type="number" id="slotCapacity" min="1" max="${firstRoomCap}" value="${firstRoomCap}" required><p class="muted" id="slotCapacityHint" style="margin:6px 0 0;font-size:0.82rem;">A terem befogadóképessége: max ${firstRoomCap} fő. Ennél kevesebbet is megadhatsz, ha kisebb létszámmal szeretnéd tartani.</p></div>
+        <div class="field"><label for="slotCapacity">Max létszám erre a foglalkozásra (fő)</label><input type="number" id="slotCapacity" min="1" placeholder="pl. 1 egyéni, 4 csoportos" required><p class="muted" style="margin:6px 0 0;font-size:0.82rem;">Kötelező megadni — a helyiségnek nincs előre rögzített kapacitása, minden foglalkozásnál te döntöd el, hány fő fér be.</p></div>
         <div class="field"><label for="slotRecurCount">Hányszor (heti ismétlődéssel)</label><select id="slotRecurCount">${recurCountOptions()}</select></div>
         <button type="submit" class="btn btn-primary btn-block">Meghirdetés</button>
       </form>
@@ -1838,20 +1838,20 @@ async function deleteTherapist(therapistId){
    ========================================================= */
 function viewAdminRooms(user){
   const rows = db.rooms.map(r=>`<tr>
-    <td>${r.name}</td><td>${r.capacity} fő</td>
+    <td>${r.name}</td>
     <td><span class="dot" style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${r.color};vertical-align:middle;"></span></td>
     <td>${r.needsTherapist?'Igen':'Nem'}</td>
     <td>${fmtHUF(r.rentalFee||0)}</td>
-    <td>${r.capacity>1 ? fmtHUF(r.rentalFeeGroup||0) : '<span class="muted">—</span>'}</td>
+    <td>${fmtHUF(r.rentalFeeGroup||0)}</td>
     <td style="white-space:nowrap;"><button class="btn btn-ghost btn-sm" data-edit-room="${r.id}">Szerkesztés</button> <button class="btn btn-danger btn-sm" data-delete-room="${r.id}">Törlés</button></td>
-  </tr>`).join('') || '<tr><td colspan="7" class="muted">Nincs felvett helyiség.</td></tr>';
+  </tr>`).join('') || '<tr><td colspan="6" class="muted">Nincs felvett helyiség.</td></tr>';
   return `<div class="card">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
       <h3 class="section-title" style="margin:0;">Helyiségek</h3>
       <button class="btn btn-primary btn-sm" data-add-room>+ Új helyiség</button>
     </div>
-    <div style="overflow-x:auto;"><table><thead><tr><th>Név</th><th>Kapacitás</th><th>Szín</th><th>Terapeuta szükséges?</th><th>Bérleti díj (egyéni)</th><th>Bérleti díj (csoportos)</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-    <p class="muted" style="margin-top:16px;">Azok a helyiségek, ahol a "Terapeuta szükséges?" Nem, terapeuta fiókból nem választhatók óra kiíráskor (pl. Masszázsfotel) — ezt admin hirdeti meg. A bérleti díj a "Terembérleti díjak" fülön kerül összesítésre.</p>
+    <div style="overflow-x:auto;"><table><thead><tr><th>Név</th><th>Szín</th><th>Terapeuta szükséges?</th><th>Bérleti díj (egyéni)</th><th>Bérleti díj (csoportos)</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="muted" style="margin-top:16px;">A helyiségeknek nincs előre rögzített kapacitása — a max létszámot minden foglalkozás kiírásakor kell megadni. Azok a helyiségek, ahol a "Terapeuta szükséges?" Nem, terapeuta fiókból nem választhatók óra kiíráskor (pl. Masszázsfotel) — ezt admin hirdeti meg. A bérleti díj a "Terembérleti díjak" fülön kerül összesítésre.</p>
   </div>`;
 }
 
@@ -1863,35 +1863,22 @@ function openRoomModal(mode, roomId){
     <h3>${isEdit?'Helyiség szerkesztése':'Új helyiség felvétele'}</h3>
     <form id="roomForm" style="margin-top:16px;">
       <div class="field"><label for="roomName">Név</label><input type="text" id="roomName" value="${isEdit?r.name:''}" required></div>
-      <div class="field"><label for="roomCapacity">Kapacitás (max fő / alkalom)</label><input type="number" id="roomCapacity" min="1" max="5" value="${isEdit?r.capacity:1}" required></div>
-      <div class="checkbox-row"><input type="checkbox" id="roomExtraSpot" ${(isEdit && r.capacity>5)?'checked':''}><label for="roomExtraSpot">Admin: +1 extra hely engedélyezése (6 fő csoportos óránál — az alapértelmezett max 5)</label></div>
       <div class="field"><label for="roomColor">Szín (naptár színkód)</label><input type="color" id="roomColor" value="${isEdit?toHex(r.color):'#1E8F76'}" required></div>
       <div class="field"><label for="roomRentalFee">Bérleti díj — egyéni alkalom (Ft)</label><input type="number" id="roomRentalFee" min="0" step="500" value="${isEdit?(r.rentalFee||0):0}" required></div>
       <div class="field"><label for="roomRentalFeeGroup">Bérleti díj — csoportos alkalom (Ft)</label><input type="number" id="roomRentalFeeGroup" min="0" step="500" value="${isEdit?(r.rentalFeeGroup||0):0}"></div>
-      <p class="muted" style="margin-bottom:14px;">A csoportos díj csak azoknál az óráknál számít, amiket több fős (1-nél nagyobb kapacitású) alkalomra írnak ki.</p>
+      <p class="muted" style="margin-bottom:14px;">A csoportos díj azoknál az óráknál számít, amiket több fős (1-nél nagyobb max létszámú) alkalomra írnak ki. A max létszámot nem itt, hanem minden foglalkozás kiírásakor kell megadni.</p>
       <div class="checkbox-row"><input type="checkbox" id="roomNeedsTherapist" ${(!isEdit || r.needsTherapist) ? 'checked' : ''}><label for="roomNeedsTherapist">Ehhez a helyiséghez terapeuta tartozik (ha nincs bepipálva, terapeuta fiókból nem lesz kiírható, pl. relaxációs zóna)</label></div>
       <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">${isEdit?'Mentés':'Felvétel'}</button>
     </form>
   `);
-  const capacityInput = document.getElementById('roomCapacity');
-  const extraSpotCheck = document.getElementById('roomExtraSpot');
-  extraSpotCheck.addEventListener('change', ()=>{
-    capacityInput.max = extraSpotCheck.checked ? '6' : '5';
-    if(!extraSpotCheck.checked && parseInt(capacityInput.value,10) > 5) capacityInput.value = 5;
-  });
-  capacityInput.max = extraSpotCheck.checked ? '6' : '5';
   document.getElementById('roomForm').addEventListener('submit', async (e)=>{
     e.preventDefault();
     const name = document.getElementById('roomName').value.trim();
-    let capacity = parseInt(document.getElementById('roomCapacity').value,10);
-    const extraSpot = document.getElementById('roomExtraSpot').checked;
-    const capMax = extraSpot ? 6 : 5;
-    if(capacity > capMax){ toast('A kapacitás legfeljebb ' + capMax + ' fő lehet, hacsak nincs bepipálva az extra hely.'); return; }
     const color = document.getElementById('roomColor').value;
     const rentalFee = parseInt(document.getElementById('roomRentalFee').value,10);
     const rentalFeeGroup = parseInt(document.getElementById('roomRentalFeeGroup').value,10) || 0;
     const needsTherapist = document.getElementById('roomNeedsTherapist').checked;
-    const payload = { name, capacity, color, needs_therapist: needsTherapist, rental_fee: rentalFee, rental_fee_group: rentalFeeGroup };
+    const payload = { name, color, needs_therapist: needsTherapist, rental_fee: rentalFee, rental_fee_group: rentalFeeGroup };
     const { error } = isEdit
       ? await sb.from('rooms').update(payload).eq('id', roomId)
       : await sb.from('rooms').insert(payload);
@@ -2036,7 +2023,6 @@ function openSlotCapacityModal(slotId){
   const s = slotOf(slotId);
   if(!s){ toast('Az időpont nem található.'); return; }
   const room = roomOf(s.roomId);
-  const roomMax = room ? room.capacity : s.capacity;
   const service = serviceOf(s.serviceTypeId);
   openModal(`<h3 class="section-title">Max létszám módosítása</h3>
     <div class="pay-detail-box" style="margin-bottom:16px;">
@@ -2046,15 +2032,14 @@ function openSlotCapacityModal(slotId){
       <div><span>Jelenleg foglalt</span><span>${s.bookedCount} fő</span></div>
     </div>
     <form id="slotCapacityForm">
-      <div class="field"><label for="slotCapacityNew">Max létszám (fő)</label><input type="number" id="slotCapacityNew" min="1" max="${roomMax}" value="${s.capacity}" required>
-        <p class="muted" style="margin:6px 0 0;font-size:0.82rem;">A terem befogadóképessége: max ${roomMax} fő. A már felvett ${s.bookedCount} főnél kevesebbet nem lehet beállítani.</p></div>
+      <div class="field"><label for="slotCapacityNew">Max létszám (fő)</label><input type="number" id="slotCapacityNew" min="1" value="${s.capacity}" required>
+        <p class="muted" style="margin:6px 0 0;font-size:0.82rem;">A már felvett ${s.bookedCount} főnél kevesebbet nem lehet beállítani.</p></div>
       <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">Mentés</button>
     </form>`);
   document.getElementById('slotCapacityForm').addEventListener('submit', async (e)=>{
     e.preventDefault();
     const val = parseInt(document.getElementById('slotCapacityNew').value,10);
     if(!val || val < 1){ toast('Adj meg legalább 1 fős létszámot.'); return; }
-    if(val > roomMax){ toast(`Ebbe a terembe legfeljebb ${roomMax} fő fér be.`); return; }
     if(val < s.bookedCount){ toast(`Erre az alkalomra már ${s.bookedCount} fő van felvéve — előbb töröld a foglalás(oka)t.`); return; }
     const { error } = await sb.from('slots').update({ capacity: val }).eq('id', s.id);
     if(error){ toast('Hiba: ' + error.message); return; }
@@ -2253,20 +2238,6 @@ function attachViewHandlers(user, tab){
     document.getElementById('rentalRoom').addEventListener('change', (e)=>{ rentalFilter.roomId = e.target.value; boot(); });
   }
 
-  /* Teremváltáskor a max létszám mező korlátja és értéke a terem
-     befogadóképességéhez igazodik (a kézzel beírt kisebb érték megmarad). */
-  const slotRoomSelect = document.getElementById('slotRoom');
-  const slotCapacityInput = document.getElementById('slotCapacity');
-  if(slotRoomSelect && slotCapacityInput) slotRoomSelect.addEventListener('change', ()=>{
-    const room = roomOf(slotRoomSelect.value);
-    if(!room) return;
-    const prev = parseInt(slotCapacityInput.value,10);
-    slotCapacityInput.max = room.capacity;
-    if(!prev || prev > room.capacity) slotCapacityInput.value = room.capacity;
-    const hint = document.getElementById('slotCapacityHint');
-    if(hint) hint.textContent = `A terem befogadóképessége: max ${room.capacity} fő. Ennél kevesebbet is megadhatsz, ha kisebb létszámmal szeretnéd tartani.`;
-  });
-
   const addSlotForm = document.getElementById('addSlotForm');
   if(addSlotForm) addSlotForm.addEventListener('submit', async (e)=>{
     e.preventDefault();
@@ -2286,11 +2257,10 @@ function attachViewHandlers(user, tab){
     const startDate = new Date(document.getElementById('slotDate').value);
     const duration = parseInt(document.getElementById('slotDuration').value,10);
     const recurCount = parseInt(document.getElementById('slotRecurCount')?.value || '1', 10);
-    /* Foglalkozásonkénti max létszám — alapból a terem kapacitása, de
-       kisebbre állítható. A teremnél nagyobb érték nem engedhető meg. */
-    const capacity = parseInt(document.getElementById('slotCapacity')?.value || String(room.capacity), 10);
-    if(!capacity || capacity < 1){ toast('Adj meg legalább 1 fős létszámot.'); return; }
-    if(capacity > room.capacity){ toast(`Ebbe a terembe legfeljebb ${room.capacity} fő fér be.`); return; }
+    /* Foglalkozásonkénti max létszám — mindig kézzel megadott érték,
+       a helyiségnek nincs saját kapacitása. */
+    const capacity = parseInt(document.getElementById('slotCapacity')?.value || '', 10);
+    if(!capacity || capacity < 1){ toast('Add meg a foglalkozás max létszámát (legalább 1 fő).'); return; }
     const newSlots = [];
     for(let i=0; i<recurCount; i++){
       const d = new Date(startDate.getTime() + i*7*24*60*60*1000);
