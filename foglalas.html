@@ -120,6 +120,11 @@ main{padding:36px 0 80px;}
 .cal-slot{background:var(--mint-bg);border-radius:10px;padding:9px 10px;margin-bottom:6px;font-size:0.8rem;}
 .cal-slot.own{background:#FDF3EC;}
 .cal-slot-top{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:3px;}
+.icon-pick-grid{display:flex;flex-wrap:wrap;gap:6px;}
+.icon-pick{font-size:1.25rem;line-height:1;width:42px;height:42px;display:flex;align-items:center;justify-content:center;background:#fff;border:1.5px solid var(--line);border-radius:10px;cursor:pointer;padding:0;transition:border-color .15s,background .15s;}
+.icon-pick:hover{border-color:var(--teal);}
+.icon-pick.active{border-color:var(--teal);background:var(--teal-soft,#E6F2EF);box-shadow:0 0 0 2px rgba(30,143,118,.15);}
+.cal-slot-icon{margin-right:5px;}
 .cal-slot-service{font-weight:700;color:var(--teal-deep);margin-bottom:2px;line-height:1.3;}
 .cal-slot-ther{color:var(--ink-soft);font-size:0.74rem;margin-bottom:6px;}
 .cal-attendees{list-style:none;margin:0 0 6px;padding:6px 0 0;border-top:1px dashed var(--line);}
@@ -348,7 +353,7 @@ async function refreshDB(){
     const bookedChildIds = db.bookings.filter(b=>b.slotId===s.id && b.status!=='cancelled').map(b=>b.childId);
     const waitlist = waitlistRows.filter(w=>w.slotId===s.id);
     const bookedCount = (s.id in occupancy) ? occupancy[s.id] : (occRes.error ? bookedChildIds.length : 0);
-    return { id:s.id, date:s.date, duration:s.duration, roomId:s.room_id, therapistId:s.therapist_id, serviceTypeId:s.service_type_id, capacity:s.capacity, bookedChildIds, bookedCount, waitlist, cancelledAt:s.cancelled_at||null, cancelReason:s.cancel_reason||null };
+    return { id:s.id, date:s.date, duration:s.duration, roomId:s.room_id, therapistId:s.therapist_id, serviceTypeId:s.service_type_id, capacity:s.capacity, icon:s.icon||null, bookedChildIds, bookedCount, waitlist, cancelledAt:s.cancelled_at||null, cancelReason:s.cancel_reason||null };
   });
   db.therapists = profiles.filter(p=>p.role==='therapist').map(p=>{
     const det = therDetails.find(d=>d.id===p.id) || {};
@@ -515,6 +520,59 @@ let rentalFilter = { from:'', to:'', therapistId:'', roomId:'' };
 let parentSearch = '';
 
 /* =========================================================
+   ALKALOM-IKONOK
+   Az óra kiírásakor választható jelkép, ami a naptárban a
+   foglalkozás neve mellett jelenik meg (pl. balett → balettcipő).
+   ========================================================= */
+const SLOT_ICONS = [
+  { key:'ballet',   char:'\u{1FA70}', label:'Balett' },
+  { key:'torna',    char:'\u{1F938}', label:'Torna / mozgásfejlesztés' },
+  { key:'labda',    char:'\u26BD',    label:'Labdás foglalkozás' },
+  { key:'pilates',  char:'\u{1F9D8}', label:'Pilates / relaxáció' },
+  { key:'logo',     char:'\u{1F5E3}', label:'Logopédia' },
+  { key:'mese',     char:'\u{1F4D6}', label:'Meseterápia' },
+  { key:'zene',     char:'\u{1F3B5}', label:'Zene / ének' },
+  { key:'kreativ',  char:'\u{1F3A8}', label:'Kreatív foglalkozás' },
+  { key:'puzzle',   char:'\u{1F9E9}', label:'DSZIT / szenzoros' },
+  { key:'baba',     char:'\u{1F476}', label:'Korai fejlesztés' },
+  { key:'massage',  char:'\u{1F486}', label:'Masszázs' },
+  { key:'fotel',    char:'\u{1F6CB}', label:'Masszázsfotel' },
+  { key:'szulo',    char:'\u{1F9E0}', label:'Mentálhigiéné / tanácsadás' },
+  { key:'szivecske',char:'\u{1F49A}', label:'Általános' },
+];
+function slotIconChar(key){
+  if(!key) return '';
+  const found = SLOT_ICONS.find(i=>i.key===key);
+  return found ? found.char : key;   // ismeretlen kulcs esetén magát az értéket mutatjuk
+}
+/* Ikonválasztó rács. A kiválasztott kulcs egy rejtett mezőben él. */
+function slotIconPicker(prefix, selected){
+  const tiles = SLOT_ICONS.map(i=>
+    `<button type="button" class="icon-pick ${selected===i.key?'active':''}" data-icon-pick="${prefix}" data-icon-key="${i.key}" title="${i.label}" aria-label="${i.label}">${i.char}</button>`
+  ).join('');
+  return `<div class="field"><label>Ikon (nem kötelező)</label>
+    <input type="hidden" id="${prefix}IconValue" value="${selected||''}">
+    <div class="icon-pick-grid">
+      <button type="button" class="icon-pick ${!selected?'active':''}" data-icon-pick="${prefix}" data-icon-key="" title="Nincs ikon" aria-label="Nincs ikon">&mdash;</button>
+      ${tiles}
+    </div>
+    <p class="muted" style="margin:6px 0 0;font-size:0.8rem;">A választott ikon a naptárban a foglalkozás neve mellett jelenik meg.</p>
+  </div>`;
+}
+/* A rács gombjainak bekötése — a nézet újrarajzolása nélkül működik. */
+function attachIconPicker(prefix){
+  const grid = document.querySelector(`[data-icon-pick="${prefix}"]`)?.parentElement;
+  if(!grid) return;
+  grid.querySelectorAll(`[data-icon-pick="${prefix}"]`).forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      grid.querySelectorAll(`[data-icon-pick="${prefix}"]`).forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(prefix+'IconValue').value = btn.dataset.iconKey;
+    });
+  });
+}
+
+/* =========================================================
    SZÁMLÁZÁSI ADATOK — közös űrlapblokk (regisztráció + profil)
    A mezők pontosan azok, amiket a Számlázz.hu a <vevo> blokkban vár:
    nev / irsz / telepules / cim / adoszam.
@@ -643,7 +701,7 @@ function renderWeekCalendar(slots, opts){
         }
         return `<div class="cal-slot ${isOwn?'own':''} ${isCancelled?'cancelled':''}">
           <div class="cal-slot-top"><strong>${time}</strong><span class="pill ${isCancelled?'full':(full?'full':'')}">${isCancelled?'Elmarad':countLabel}</span></div>
-          <div class="cal-slot-service">${service.name}</div>
+          <div class="cal-slot-service">${s.icon ? `<span class="cal-slot-icon">${slotIconChar(s.icon)}</span>` : ''}${service.name}</div>
           ${opts.showTherapist!==false ? `<div class="cal-slot-ther">${therName}${isOwn?' · Sajátom':''}</div>` : ''}
           ${participants}
           ${opts.showParticipants && !restricted && s.waitlist && s.waitlist.length>0 ? `<div class="cal-waitnote">⏳ ${s.waitlist.length} fő várólistán</div>` : ''}
@@ -1385,7 +1443,7 @@ function viewTherapistAnnounce(user){
   const calendar = renderWeekCalendar(ownSlots, {
     showTherapist:false,
     showParticipants:true,
-    actionRenderer: (s) => `<button class="btn btn-primary btn-sm cal-slot-btn" data-admin-book-slot="${s.id}" style="margin-bottom:4px;">Foglalás felvétele</button><button class="btn btn-ghost btn-sm cal-slot-btn" data-edit-slot-capacity="${s.id}" style="margin-bottom:4px;">Létszám</button><button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
+    actionRenderer: (s) => `<button class="btn btn-primary btn-sm cal-slot-btn" data-admin-book-slot="${s.id}" style="margin-bottom:4px;">Foglalás felvétele</button><button class="btn btn-ghost btn-sm cal-slot-btn" data-edit-slot-capacity="${s.id}" style="margin-bottom:4px;">Létszám / ikon</button><button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
   });
   const ownServices = db.serviceTypes.filter(s=>s.therapistId===user.id);
   const therRooms = db.rooms.filter(r=>r.needsTherapist);
@@ -1416,6 +1474,7 @@ function viewTherapistAnnounce(user){
         <div class="field"><label for="slotRoom">Helyszín</label><select id="slotRoom" required>${roomOpts}</select></div>
         <div class="field"><label for="slotService">Foglalkozás típusa</label><select id="slotService" required>${serviceOpts}</select></div>
         <div class="field"><label for="slotCapacity">Max létszám erre a foglalkozásra (fő)</label><input type="number" id="slotCapacity" min="1" placeholder="pl. 1 egyéni, 4 csoportos" required><p class="muted" style="margin:6px 0 0;font-size:0.82rem;">Kötelező megadni — a helyiségnek nincs előre rögzített kapacitása, minden foglalkozásnál te döntöd el, hány fő fér be.</p></div>
+        ${slotIconPicker('slot', null)}
         <div class="field"><label for="slotRecurCount">Hányszor (heti ismétlődéssel)</label><select id="slotRecurCount">${recurOpts}</select></div>
         <p class="muted" style="margin-bottom:14px;">A Masszázsfotel és a Masszázs szolgáltatás nem választható terapeuta fiókból — azokat az admin hirdeti meg.</p>
         <button type="submit" class="btn btn-primary btn-block" ${ownServices.length===0?'disabled':''}>Meghirdetés</button>
@@ -1529,7 +1588,7 @@ function viewAdminCalendar(user){
   const calendar = renderWeekCalendar(applyRoomFilter(db.slots), {
     showParticipants:true,
     allowRemove:true,
-    actionRenderer: (s) => `<button class="btn btn-primary btn-sm cal-slot-btn" data-admin-book-slot="${s.id}" style="margin-bottom:4px;">Foglalás felvétele</button><button class="btn btn-ghost btn-sm cal-slot-btn" data-edit-slot-capacity="${s.id}" style="margin-bottom:4px;">Létszám</button><button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
+    actionRenderer: (s) => `<button class="btn btn-primary btn-sm cal-slot-btn" data-admin-book-slot="${s.id}" style="margin-bottom:4px;">Foglalás felvétele</button><button class="btn btn-ghost btn-sm cal-slot-btn" data-edit-slot-capacity="${s.id}" style="margin-bottom:4px;">Létszám / ikon</button><button class="btn btn-danger btn-sm cal-slot-btn" data-delete-slot="${s.id}">Törlés</button>`,
   });
 
   return `<div class="grid-2" style="margin-bottom:24px;">
@@ -1541,6 +1600,7 @@ function viewAdminCalendar(user){
         <div class="field"><label for="slotTherapist">Terapeuta</label><select id="slotTherapist">${therOpts}</select></div>
         <div class="field"><label for="slotService">Foglalkozás típusa</label><select id="slotService" required>${serviceOpts}</select></div>
         <div class="field"><label for="slotCapacity">Max létszám erre a foglalkozásra (fő)</label><input type="number" id="slotCapacity" min="1" placeholder="pl. 1 egyéni, 4 csoportos" required><p class="muted" style="margin:6px 0 0;font-size:0.82rem;">Kötelező megadni — a helyiségnek nincs előre rögzített kapacitása, minden foglalkozásnál te döntöd el, hány fő fér be.</p></div>
+        ${slotIconPicker('slot', null)}
         <div class="field"><label for="slotRecurCount">Hányszor (heti ismétlődéssel)</label><select id="slotRecurCount">${recurCountOptions()}</select></div>
         <button type="submit" class="btn btn-primary btn-block">Meghirdetés</button>
       </form>
@@ -2173,7 +2233,7 @@ function openSlotCapacityModal(slotId){
   if(!s){ toast('Az időpont nem található.'); return; }
   const room = roomOf(s.roomId);
   const service = serviceOf(s.serviceTypeId);
-  openModal(`<h3 class="section-title">Max létszám módosítása</h3>
+  openModal(`<h3 class="section-title">Alkalom beállításai</h3>
     <div class="pay-detail-box" style="margin-bottom:16px;">
       <div><span>Foglalkozás</span><span><strong>${service ? service.name : '—'}</strong></span></div>
       <div><span>Időpont</span><span>${fmtDate(s.date)}</span></div>
@@ -2183,16 +2243,19 @@ function openSlotCapacityModal(slotId){
     <form id="slotCapacityForm">
       <div class="field"><label for="slotCapacityNew">Max létszám (fő)</label><input type="number" id="slotCapacityNew" min="1" value="${s.capacity}" required>
         <p class="muted" style="margin:6px 0 0;font-size:0.82rem;">A már felvett ${s.bookedCount} főnél kevesebbet nem lehet beállítani.</p></div>
+      ${slotIconPicker('slotEdit', s.icon)}
       <button type="submit" class="btn btn-primary btn-block" style="margin-top:16px;">Mentés</button>
     </form>`);
+  attachIconPicker('slotEdit');
   document.getElementById('slotCapacityForm').addEventListener('submit', async (e)=>{
     e.preventDefault();
     const val = parseInt(document.getElementById('slotCapacityNew').value,10);
     if(!val || val < 1){ toast('Adj meg legalább 1 fős létszámot.'); return; }
     if(val < s.bookedCount){ toast(`Erre az alkalomra már ${s.bookedCount} fő van felvéve — előbb töröld a foglalás(oka)t.`); return; }
-    const { error } = await sb.from('slots').update({ capacity: val }).eq('id', s.id);
+    const icon = document.getElementById('slotEditIconValue')?.value || null;
+    const { error } = await sb.from('slots').update({ capacity: val, icon }).eq('id', s.id);
     if(error){ toast('Hiba: ' + error.message); return; }
-    closeModal(); toast('A max létszám módosítva.'); await refreshDB(); boot();
+    closeModal(); toast('Az alkalom módosítva.'); await refreshDB(); boot();
   });
 }
 document.getElementById('modalOverlay').addEventListener('click', (e)=>{ if(e.target.id==='modalOverlay') closeModal(); });
@@ -2425,6 +2488,7 @@ function attachViewHandlers(user, tab){
   }
 
   const addSlotForm = document.getElementById('addSlotForm');
+  if(addSlotForm) attachIconPicker('slot');
   if(addSlotForm) addSlotForm.addEventListener('submit', async (e)=>{
     e.preventDefault();
     const mode = addSlotForm.dataset.mode;
@@ -2447,13 +2511,14 @@ function attachViewHandlers(user, tab){
        a helyiségnek nincs saját kapacitása. */
     const capacity = parseInt(document.getElementById('slotCapacity')?.value || '', 10);
     if(!capacity || capacity < 1){ toast('Add meg a foglalkozás max létszámát (legalább 1 fő).'); return; }
+    const slotIcon = document.getElementById('slotIconValue')?.value || null;
     const newSlots = [];
     for(let i=0; i<recurCount; i++){
       const d = new Date(startDate.getTime() + i*7*24*60*60*1000);
       newSlots.push({
         date: d.toISOString(), duration,
         room_id: roomId, therapist_id: therapistId, service_type_id: serviceTypeId,
-        capacity,
+        capacity, icon: slotIcon,
       });
     }
     const { error } = await sb.from('slots').insert(newSlots);
