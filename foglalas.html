@@ -31,9 +31,6 @@ button{font-family:var(--ff-body);cursor:pointer;}
 .container{max-width:1180px;margin:0 auto;padding:0 24px;}
 :focus-visible{outline:3px solid var(--coral);outline-offset:2px;border-radius:6px;}
 
-/* demo banner */
-.demo-banner{background:var(--gold);color:var(--teal-deep);font-weight:700;font-size:0.85rem;text-align:center;padding:10px 16px;}
-.demo-banner a{text-decoration:underline;}
 
 /* topbar */
 .topbar{background:var(--white);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:50;}
@@ -77,6 +74,10 @@ main{padding:36px 0 80px;}
 .auth-logo{display:flex;justify-content:center;margin-bottom:18px;}
 .auth-logo img{width:88px;height:88px;border-radius:50%;display:block;object-fit:contain;}
 .auth-toggle{display:flex;background:var(--mint-bg);border-radius:999px;padding:4px;margin-bottom:24px;}
+.auth-hint{margin-top:18px;font-size:0.82rem;color:var(--ink-soft);background:var(--mint-bg);padding:14px 16px;border-radius:var(--radius-sm);line-height:1.55;}
+.auth-hint strong{color:var(--teal-deep);}
+.auth-hint ul{margin:8px 0 0;padding-left:18px;}
+.auth-hint li{margin-bottom:4px;}
 .auth-toggle button{flex:1;border:none;background:transparent;padding:10px;border-radius:999px;font-weight:700;font-size:0.88rem;color:var(--ink-soft);}
 .auth-toggle button.active{background:var(--teal-deep);color:#fff;}
 .field{display:flex;flex-direction:column;gap:6px;margin-bottom:16px;}
@@ -85,7 +86,6 @@ main{padding:36px 0 80px;}
 .field input:focus,.field select:focus,.field textarea:focus{border-color:var(--teal);outline:none;background:#fff;}
 .field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 .form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;}
-.demo-accounts{margin-top:18px;font-size:0.78rem;color:var(--ink-soft);background:var(--mint-bg);padding:12px 14px;border-radius:var(--radius-sm);}
 .form-error{background:var(--danger-bg);color:var(--danger);padding:10px 14px;border-radius:var(--radius-sm);font-size:0.86rem;font-weight:600;margin-bottom:14px;display:none;}
 
 /* slot list */
@@ -201,7 +201,6 @@ footer.app-footer{text-align:center;padding:30px 0;color:var(--ink-soft);font-si
 }
 @media (max-width:420px){
   .brand strong{display:none;}
-  .demo-banner{font-size:0.76rem;padding:8px 10px;}
   .auth-card{padding:26px 20px;}
   .card{padding:14px;}
   h3.section-title{font-size:1.02rem;}
@@ -210,7 +209,6 @@ footer.app-footer{text-align:center;padding:30px 0;color:var(--ink-soft);font-si
 </head>
 <body>
 
-<div class="demo-banner" id="demoBanner" style="display:none;">⚠️ Élő adatbázis (Supabase) — az adatok már mindenki böngészőjében megjelennek. Valós bankkártyás fizetés és automatikus email még nincs bekötve, lásd a README-t.</div>
 
 <div class="topbar">
   <div class="topbar-inner">
@@ -266,10 +264,16 @@ footer.app-footer{text-align:center;padding:30px 0;color:var(--ink-soft);font-si
       <p class="muted" style="margin-top:12px;font-size:0.78rem;text-align:center;">A regisztrációval elfogadod <a href="index.html#adatvedelem" onclick="window.open('adatvedelem.html','_blank');return false;" style="color:var(--teal);">adatkezelési tájékoztatónkat</a>.</p>
     </form>
 
-    <div class="demo-accounts">
-      <strong>Első belépés?</strong><br>
-      Szülőként/felhasználóként regisztrálj a fenti űrlappal. Terapeuta és admin fiókot a Supabase Dashboardon (Authentication → Users) tud létrehozni az adminisztrátor — lásd az útmutatót.
+    <div class="auth-hint" id="authHint">
+      <strong>Első alkalommal jársz itt?</strong>
+      <ul>
+        <li>Regisztrálj a <em>Regisztráció</em> fülön — elég a neved, e-mail-címed, telefonszámod és egy jelszó.</li>
+        <li>A regisztráció után e-mailben kapsz egy megerősítő linket. Kattints rá, és már be is tudsz lépni.</li>
+        <li>Belépés után vedd fel a gyermeked adatait a <em>Gyermekeim</em> fülön — utána már foglalhatsz is időpontot.</li>
+        <li>A számlázási adatokat nem kötelező azonnal megadni, később a <em>Profil</em> fülön bármikor pótolhatod.</li>
+      </ul>
     </div>
+
   </div>
 </div>
 
@@ -284,7 +288,7 @@ footer.app-footer{text-align:center;padding:30px 0;color:var(--ink-soft);font-si
   </div>
 </main>
 
-<footer class="app-footer">Mérföldkő Fejlesztőház — Időpontfoglaló rendszer (demó) · <a href="index.html">Főoldal</a></footer>
+<footer class="app-footer">Mérföldkő Fejlesztőház — Időpontfoglaló rendszer · <a href="index.html">Főoldal</a></footer>
 
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal" id="modalBody"></div>
@@ -743,7 +747,7 @@ const forgotPasswordForm = document.getElementById('forgotPasswordForm');
 const resetPasswordForm = document.getElementById('resetPasswordForm');
 const authError = document.getElementById('authError');
 const authToggleRow = document.querySelector('.auth-toggle');
-const demoAccountsBox = document.querySelector('.demo-accounts');
+const authHintBox = document.getElementById('authHint');
 
 function showAuthForm(which){
   loginForm.style.display = which==='login' ? 'block' : 'none';
@@ -751,7 +755,7 @@ function showAuthForm(which){
   forgotPasswordForm.style.display = which==='forgot' ? 'block' : 'none';
   resetPasswordForm.style.display = which==='reset' ? 'block' : 'none';
   authToggleRow.style.display = (which==='login' || which==='register') ? 'flex' : 'none';
-  demoAccountsBox.style.display = (which==='login' || which==='register') ? 'block' : 'none';
+  if(authHintBox) authHintBox.style.display = (which==='login' || which==='register') ? 'block' : 'none';
   authError.style.display = 'none';
 }
 
@@ -850,9 +854,6 @@ function boot(){
   const authScreen = document.getElementById('authScreen');
   const appMain = document.getElementById('appMain');
   const topbarActions = document.getElementById('topbarActions');
-  const demoBanner = document.getElementById('demoBanner');
-  demoBanner.style.display = (user && user.role==='admin') ? 'block' : 'none';
-
   if(!user){ authScreen.style.display='block'; appMain.style.display='none'; return; }
 
   authScreen.style.display='none'; appMain.style.display='block';
