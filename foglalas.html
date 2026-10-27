@@ -120,6 +120,9 @@ main{padding:36px 0 80px;}
 .cal-slot{background:var(--mint-bg);border-radius:10px;padding:9px 10px;margin-bottom:6px;font-size:0.8rem;}
 .cal-slot.own{background:#FDF3EC;}
 .cal-slot-top{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:3px;}
+.slot-preview{background:var(--mint-bg);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:16px;font-size:0.84rem;color:var(--ink-soft);line-height:1.6;}
+.slot-preview strong{color:var(--teal-deep);}
+.slot-preview .dst-warn{display:block;margin-top:8px;color:#A25A18;font-weight:600;}
 .icon-pick-grid{display:flex;flex-wrap:wrap;gap:6px;}
 .icon-pick{font-size:1.25rem;line-height:1;width:42px;height:42px;display:flex;align-items:center;justify-content:center;background:#fff;border:1.5px solid var(--line);border-radius:10px;cursor:pointer;padding:0;transition:border-color .15s,background .15s;}
 .icon-pick:hover{border-color:var(--teal);}
@@ -269,7 +272,8 @@ footer.app-footer{text-align:center;padding:30px 0;color:var(--ink-soft);font-si
       <ul>
         <li>Regisztrálj a <em>Regisztráció</em> fülön — elég a neved, e-mail-címed, telefonszámod és egy jelszó.</li>
         <li>A regisztráció után e-mailben kapsz egy megerősítő linket. Kattints rá, és már be is tudsz lépni.</li>
-        <li>Belépés után vedd fel a gyermeked adatait a <em>Gyermekeim</em> fülön — utána már foglalhatsz is időpontot.</li>
+        <li>Belépés után a <em>Naptár &amp; Foglalás</em> fülön már foglalhatsz is. Ha magadnak jössz (pl. pilates, masszázs), nincs más teendőd.</li>
+        <li>Ha a gyermekednek foglalnál, előbb vedd fel az adatait a <em>Gyermekeim</em> fülön — utána őt is ki tudod választani foglaláskor.</li>
         <li>A számlázási adatokat nem kötelező azonnal megadni, később a <em>Profil</em> fülön bármikor pótolhatod.</li>
       </ul>
     </div>
@@ -484,6 +488,14 @@ function startOfWeek(d){
   date.setDate(date.getDate()+diff); date.setHours(0,0,0,0); return date;
 }
 function addDays(d,n){ const r = new Date(d); r.setDate(r.getDate()+n); return r; }
+/* Heti ismétlődés HELYI naptár szerint.
+   FONTOS: soha ne adj hozzá 7*24*60*60*1000 ezredmásodpercet! Az óraátállítás
+   hetében egy hét nem 168 óra (ősszel 169, tavasszal 167), ezért a fix
+   ezredmásodperc-hozzáadás eltolná az órákat. A setDate() a helyi fali
+   órát tartja meg, és a Date maga számolja hozzá a helyes időzóna-eltolást. */
+function addWeeks(d,n){ const r = new Date(d); r.setDate(r.getDate()+n*7); return r; }
+/* Két időpont ugyanaz-e (másodperc-szintű eltérést tűrve). */
+function sameMoment(a,b){ return Math.abs(new Date(a).getTime() - new Date(b).getTime()) < 60000; }
 function weekRangeLabel(monday){
   const sunday = addDays(monday,6);
   const f = (d)=>d.toLocaleDateString('hu-HU',{month:'short',day:'numeric'});
@@ -1062,10 +1074,10 @@ async function confirmAdminBooking(slotId, parentId, childId, forSelf){
   const targets = [s];
   if(recurCount > 1){
     for(let i=1; i<recurCount; i++){
-      const targetTime = new Date(s.date).getTime() + i*7*24*60*60*1000;
+      const target = addWeeks(new Date(s.date), i);
       const match = db.slots.find(x=>
         x.serviceTypeId===s.serviceTypeId && x.roomId===s.roomId && x.therapistId===s.therapistId &&
-        new Date(x.date).getTime() === targetTime
+        sameMoment(x.date, target)
       );
       if(match) targets.push(match);
     }
@@ -1168,10 +1180,10 @@ async function confirmBooking(user, slotId){
   const targets = [s];
   if(recurCount > 1){
     for(let i=1; i<recurCount; i++){
-      const targetTime = new Date(s.date).getTime() + i*7*24*60*60*1000;
+      const target = addWeeks(new Date(s.date), i);
       const match = db.slots.find(x=>
         x.serviceTypeId===s.serviceTypeId && x.roomId===s.roomId && x.therapistId===s.therapistId &&
-        new Date(x.date).getTime() === targetTime
+        sameMoment(x.date, target)
       );
       if(match) targets.push(match);
     }
@@ -1477,6 +1489,7 @@ function viewTherapistAnnounce(user){
         <div class="field"><label for="slotCapacity">Max létszám erre a foglalkozásra (fő)</label><input type="number" id="slotCapacity" min="1" placeholder="pl. 1 egyéni, 4 csoportos" required><p class="muted" style="margin:6px 0 0;font-size:0.82rem;">Kötelező megadni — a helyiségnek nincs előre rögzített kapacitása, minden foglalkozásnál te döntöd el, hány fő fér be.</p></div>
         ${slotIconPicker('slot', null)}
         <div class="field"><label for="slotRecurCount">Hányszor (heti ismétlődéssel)</label><select id="slotRecurCount">${recurOpts}</select></div>
+        <div id="slotPreview" class="slot-preview" style="display:none;"></div>
         <p class="muted" style="margin-bottom:14px;">A Masszázsfotel és a Masszázs szolgáltatás nem választható terapeuta fiókból — azokat az admin hirdeti meg.</p>
         <button type="submit" class="btn btn-primary btn-block" ${ownServices.length===0?'disabled':''}>Meghirdetés</button>
       </form>
@@ -1603,6 +1616,7 @@ function viewAdminCalendar(user){
         <div class="field"><label for="slotCapacity">Max létszám erre a foglalkozásra (fő)</label><input type="number" id="slotCapacity" min="1" placeholder="pl. 1 egyéni, 4 csoportos" required><p class="muted" style="margin:6px 0 0;font-size:0.82rem;">Kötelező megadni — a helyiségnek nincs előre rögzített kapacitása, minden foglalkozásnál te döntöd el, hány fő fér be.</p></div>
         ${slotIconPicker('slot', null)}
         <div class="field"><label for="slotRecurCount">Hányszor (heti ismétlődéssel)</label><select id="slotRecurCount">${recurCountOptions()}</select></div>
+        <div id="slotPreview" class="slot-preview" style="display:none;"></div>
         <button type="submit" class="btn btn-primary btn-block">Meghirdetés</button>
       </form>
     </div>
@@ -2490,6 +2504,37 @@ function attachViewHandlers(user, tab){
 
   const addSlotForm = document.getElementById('addSlotForm');
   if(addSlotForm) attachIconPicker('slot');
+  /* Élő előnézet a kiírandó alkalmakról. Ez a biztosíték arra, hogy egy
+     óraátállítás vagy elgépelés miatt elcsúszott időpont már a Meghirdetés
+     gomb megnyomása ELŐTT kiderüljön. */
+  if(addSlotForm){
+    const dateEl = document.getElementById('slotDate');
+    const recurEl = document.getElementById('slotRecurCount');
+    const prevEl = document.getElementById('slotPreview');
+    const renderPreview = ()=>{
+      if(!prevEl) return;
+      const raw = dateEl.value;
+      if(!raw){ prevEl.style.display='none'; return; }
+      const start = new Date(raw);
+      if(isNaN(start)){ prevEl.style.display='none'; return; }
+      const n = parseInt(recurEl?.value || '1', 10);
+      const dates = [];
+      for(let i=0; i<n; i++) dates.push(addWeeks(start, i));
+      const fmt = (d)=>d.toLocaleString('hu-HU',{ timeZone:'Europe/Budapest', month:'short', day:'numeric', weekday:'short', hour:'2-digit', minute:'2-digit' });
+      const shown = dates.slice(0,6).map(d=>fmt(d)).join(' · ');
+      const rest = dates.length>6 ? ` … (+${dates.length-6} további)` : '';
+      // Ha a sorozat átlép egy óraátállítást, azt külön is jelezzük.
+      const offs = dates.map(d=>d.getTimezoneOffset());
+      const crossesDst = offs.some(o=>o!==offs[0]);
+      prevEl.innerHTML = `<strong>${dates.length>1 ? dates.length+' alkalom lesz kiírva:' : 'Kiírandó alkalom:'}</strong><br>${shown}${rest}`
+        + (crossesDst ? '<span class="dst-warn">A sorozat átnyúlik az óraátállításon — minden alkalom a fent látható órában marad.</span>' : '');
+      prevEl.style.display='block';
+    };
+    dateEl?.addEventListener('change', renderPreview);
+    dateEl?.addEventListener('input', renderPreview);
+    recurEl?.addEventListener('change', renderPreview);
+    renderPreview();
+  }
   if(addSlotForm) addSlotForm.addEventListener('submit', async (e)=>{
     e.preventDefault();
     const mode = addSlotForm.dataset.mode;
@@ -2515,7 +2560,7 @@ function attachViewHandlers(user, tab){
     const slotIcon = document.getElementById('slotIconValue')?.value || null;
     const newSlots = [];
     for(let i=0; i<recurCount; i++){
-      const d = new Date(startDate.getTime() + i*7*24*60*60*1000);
+      const d = addWeeks(startDate, i);
       newSlots.push({
         date: d.toISOString(), duration,
         room_id: roomId, therapist_id: therapistId, service_type_id: serviceTypeId,
@@ -2540,7 +2585,7 @@ function attachViewHandlers(user, tab){
     e.preventDefault();
     const type = parseInt(document.getElementById('pkgType').value,10);
     const weeks = parseInt(document.getElementById('pkgWeeks').value,10);
-    const expiresAt = new Date(Date.now() + weeks*7*24*60*60*1000).toISOString();
+    const expiresAt = addWeeks(new Date(), weeks).toISOString();
     const childId = document.getElementById('pkgChild').value;
     const child = findChildAnywhere(childId);
     if(!child){ toast('Válassz gyermeket.'); return; }
