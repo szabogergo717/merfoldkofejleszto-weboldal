@@ -496,6 +496,34 @@ function addDays(d,n){ const r = new Date(d); r.setDate(r.getDate()+n); return r
 function addWeeks(d,n){ const r = new Date(d); r.setDate(r.getDate()+n*7); return r; }
 /* Két időpont ugyanaz-e (másodperc-szintű eltérést tűrve). */
 function sameMoment(a,b){ return Math.abs(new Date(a).getTime() - new Date(b).getTime()) < 60000; }
+
+/* Ütközésvizsgálat: egy terembe és egy terapeutához sem kerülhet két
+   egyidejű (átfedő) óra. Ugyanezt az adatbázis is ellenőrzi — ez itt
+   csak azért van, hogy a hibát előre, érthetően megmutassuk.
+   Visszatér a legelső ütköző alkalommal, vagy null-lal. */
+function findSlotConflict(startISO, duration, roomId, therapistId, ignoreSlotId){
+  const aFrom = new Date(startISO).getTime();
+  const aTo   = aFrom + duration*60000;
+  for(const x of db.slots){
+    if(ignoreSlotId && x.id === ignoreSlotId) continue;
+    if(x.cancelledAt) continue;                       // lemondott óra nem foglalja a termet
+    const bFrom = new Date(x.date).getTime();
+    const bTo   = bFrom + (x.duration||45)*60000;
+    if(aFrom >= bTo || bFrom >= aTo) continue;        // nincs átfedés
+    if(x.roomId === roomId) return { slot:x, ok:'terem' };
+    if(therapistId && x.therapistId === therapistId) return { slot:x, ok:'terapeuta' };
+  }
+  return null;
+}
+/* Emberi nyelvű üzenet egy ütközésről. */
+function conflictMessage(c){
+  const when = new Date(c.slot.date).toLocaleString('hu-HU',{ timeZone:'Europe/Budapest', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+  const svc  = serviceOf(c.slot.serviceTypeId)?.name || 'foglalkozás';
+  const room = roomOf(c.slot.roomId)?.name || 'terem';
+  return c.ok==='terem'
+    ? `${when} — ebben a teremben (${room}) már van óra: ${svc}`
+    : `${when} — ennek a terapeutának már van órája: ${svc}`;
+}
 function weekRangeLabel(monday){
   const sunday = addDays(monday,6);
   const f = (d)=>d.toLocaleDateString('hu-HU',{month:'short',day:'numeric'});
@@ -2567,8 +2595,26 @@ function attachViewHandlers(user, tab){
         capacity, icon: slotIcon,
       });
     }
+    /* Mentés ELŐTT megnézzük, ütközik-e bármelyik alkalom. A beszúrás
+       egyetlen tranzakció: ha egy sor megbukik, egy sem jön létre —
+       ezért fontos, hogy előre lássuk, pontosan melyik napon a gond. */
+    const utkozesek = [];
+    for(const ns of newSlots){
+      const c = findSlotConflict(ns.date, duration, roomId, therapistId);
+      if(c) utkozesek.push(conflictMessage(c));
+    }
+    if(utkozesek.length){
+      toast('Ütközés — ez nem írható ki: ' + utkozesek.slice(0,3).join(' | ')
+        + (utkozesek.length>3 ? ` (+${utkozesek.length-3} további)` : ''));
+      return;
+    }
     const { error } = await sb.from('slots').insert(newSlots);
-    if(error){ toast('Hiba: ' + error.message); return; }
+    if(error){
+      // Az adatbázis ütközésvédelme magyarul üzen — azt mutatjuk, nem a nyers hibát.
+      const m = error.message || '';
+      toast(/már van (foglalkozás|órája)/.test(m) ? m : 'Hiba: ' + m);
+      return;
+    }
     toast(recurCount>1 ? `${recurCount} időpont meghirdetve (heti ismétlődéssel).` : 'Időpont meghirdetve.');
     await refreshDB(); boot();
   });
